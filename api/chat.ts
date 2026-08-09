@@ -94,6 +94,48 @@ function safeAnswer(answer: string, parts: IndexedPart[]) {
   return answer
 }
 
+function anthropicErrorDetails(error: unknown, model: string) {
+  if (!(error instanceof Anthropic.APIError)) {
+    return {
+      error: 'Il servizio AI non è momentaneamente disponibile. Riprova tra poco.',
+      code: 'ANTHROPIC_UNAVAILABLE',
+    }
+  }
+
+  switch (error.status) {
+    case 400:
+      return {
+        error: `Anthropic ha rifiutato la configurazione della richiesta per ${model}.`,
+        code: 'ANTHROPIC_BAD_REQUEST',
+      }
+    case 401:
+      return {
+        error: 'La chiave Anthropic configurata su Vercel non è valida.',
+        code: 'ANTHROPIC_INVALID_KEY',
+      }
+    case 403:
+      return {
+        error: `La chiave Anthropic non ha accesso al modello ${model}.`,
+        code: 'ANTHROPIC_MODEL_FORBIDDEN',
+      }
+    case 404:
+      return {
+        error: `Il modello Anthropic ${model} non è disponibile per questo account.`,
+        code: 'ANTHROPIC_MODEL_NOT_FOUND',
+      }
+    case 429:
+      return {
+        error: 'Quota Anthropic esaurita o limite di richieste raggiunto.',
+        code: 'ANTHROPIC_RATE_LIMIT',
+      }
+    default:
+      return {
+        error: 'Anthropic non è momentaneamente disponibile. Riprova tra poco.',
+        code: 'ANTHROPIC_UPSTREAM_ERROR',
+      }
+  }
+}
+
 export default async function handler(
   request: VercelRequest,
   response: VercelResponse,
@@ -228,9 +270,16 @@ export default async function handler(
       model,
     })
   } catch (error) {
-    console.error('Anthropic retrieval failed', error)
+    const details = anthropicErrorDetails(error, model)
+    console.error('Anthropic retrieval failed', {
+      code: details.code,
+      model,
+      status: error instanceof Anthropic.APIError ? error.status : undefined,
+      requestId: error instanceof Anthropic.APIError ? error.requestID : undefined,
+      message: error instanceof Error ? error.message : 'Unknown error',
+    })
     return response.status(502).json({
-      error: 'Il servizio AI non è momentaneamente disponibile. Riprova tra poco.',
+      ...details,
     })
   }
 }
