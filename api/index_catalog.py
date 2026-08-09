@@ -163,10 +163,24 @@ class SupabaseREST:
                 details = json.loads(response_body.decode("utf-8"))
             except (UnicodeDecodeError, json.JSONDecodeError):
                 details = {"upstream": response_body[:500].decode("utf-8", "replace")}
+            upstream_message = ""
+            if isinstance(details, dict):
+                upstream_message = next(
+                    (
+                        str(details[key])
+                        for key in ("message", "error", "details", "hint")
+                        if isinstance(details.get(key), str) and details[key].strip()
+                    ),
+                    "",
+                )
             raise IndexingError(
                 502 if error.code >= 500 else error.code,
                 "SUPABASE_REQUEST_FAILED",
-                "Richiesta Supabase non riuscita.",
+                (
+                    f"Supabase: {upstream_message}"
+                    if upstream_message
+                    else "Richiesta Supabase non riuscita."
+                ),
                 {"status": error.code, "response": details},
             ) from error
         except (URLError, TimeoutError) as error:
@@ -454,13 +468,13 @@ def _detect_catalog_metadata(
         r"model(?:lo|e)?|type|tipo|vehicle\s+type|machine\s+type",
         100,
     )
-    model_match = re.search(
+    model_pattern = (
         r"\b(?:T\d{2,4}|CPD[A-Z0-9-]*\d[A-Z0-9-]*|"
         r"CPCD[A-Z0-9-]*\d[A-Z0-9-]*|CBD[A-Z0-9-]*\d[A-Z0-9-]*|"
-        r"XC[A-Z0-9-]*\d[A-Z0-9-]*|FIO[A-Z0-9-]*\d[A-Z0-9-]*)\b",
-        combined,
-        re.I,
+        r"XC[A-Z0-9-]*\d[A-Z0-9-]*|FIO[A-Z0-9-]*\d[A-Z0-9-]*)\b"
     )
+    filename_model_match = re.search(model_pattern, filename_text, re.I)
+    model_match = re.search(model_pattern, combined, re.I)
     labelled_model_match = (
         re.search(
             r"\b[A-Z][A-Z0-9._/-]{1,30}\d[A-Z0-9._/-]*\b",
@@ -472,9 +486,17 @@ def _detect_catalog_metadata(
     )
     model = _clean_metadata_value(
         (
-            labelled_model_match.group(0)
-            if labelled_model_match
-            else (model_match.group(0) if model_match else labelled_model)
+            filename_model_match.group(0)
+            if filename_model_match
+            else (
+                model_match.group(0)
+                if model_match
+                else (
+                    labelled_model_match.group(0)
+                    if labelled_model_match
+                    else labelled_model
+                )
+            )
         ),
         100,
     ).upper()
@@ -1279,6 +1301,7 @@ def _extract(
         for index, result in enumerate(page_results)
         if result.text_characters < MIN_TEXT_CHARACTERS
         or (bool(result.parts) and result.confidence < MIN_PAGE_CONFIDENCE)
+        or "unparsed_table" in result.reasons
     ]
     # Pages with actual low-confidence rows have priority over image-only pages.
     suspect_indexes.sort(

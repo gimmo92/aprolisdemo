@@ -1865,7 +1865,7 @@ button {
 
 .admin-catalog-row {
   display: grid;
-  grid-template-columns: 10px minmax(220px, 1fr) auto auto 34px;
+  grid-template-columns: 10px minmax(220px, 1fr) auto auto auto;
   align-items: center;
   gap: 14px;
   padding: 13px 2px;
@@ -1927,6 +1927,20 @@ button {
   border-radius: 8px;
 }
 
+.admin-row-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.icon-retry {
+  padding: 7px;
+  cursor: pointer;
+  color: #1d4ed8;
+  background: #eff6ff;
+  border: 0;
+  border-radius: 8px;
+}
+
 .admin-auth,
 .admin-empty {
   max-width: 440px;
@@ -1966,7 +1980,7 @@ button {
     display: none;
   }
 
-  .icon-danger {
+  .admin-row-actions {
     grid-column: 3;
   }
 }

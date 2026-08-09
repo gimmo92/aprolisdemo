@@ -229,6 +229,31 @@ export function AdminCatalogs() {
     await refresh()
   }
 
+  async function retryCatalog(catalog: AdminCatalog) {
+    const failedJob = catalog.ingestion_jobs?.find((job) => job.status === 'failed')
+    if (!failedJob || !authHeaders) return
+    setBusy(true)
+    setMessage(`Nuova indicizzazione di ${catalog.original_filename}…`)
+    try {
+      const response = await fetch('/api/index_catalog', {
+        method: 'POST',
+        headers: authHeaders,
+        body: JSON.stringify({
+          catalogId: catalog.id,
+          jobId: failedJob.id,
+        }),
+      })
+      const payload = await response.json()
+      if (!response.ok) throw new Error(payload.error)
+      setMessage(`Catalogo aggiornato: ${payload.accepted || 0} ricambi indicizzati.`)
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Indicizzazione non riuscita.')
+    } finally {
+      setBusy(false)
+      await refresh()
+    }
+  }
+
   if (loading) return <div className="admin-empty"><LoaderCircle className="spin" /></div>
   if (!supabase) {
     return (
@@ -323,7 +348,12 @@ export function AdminCatalogs() {
               </div>
               <span className="status-badge">{state === 'ready' && <CheckCircle2 size={14} />}{statusLabel(state)} {job?.progress ? `${job.progress}%` : ''}</span>
               <span>{catalog.part_count || 0} ricambi</span>
-              <button className="icon-danger" onClick={() => void removeCatalog(catalog)} disabled={busy} aria-label="Elimina catalogo"><Trash2 size={17} /></button>
+              <div className="admin-row-actions">
+                {state === 'failed' && (
+                  <button className="icon-retry" onClick={() => void retryCatalog(catalog)} disabled={busy} aria-label="Riprova indicizzazione"><RefreshCw size={17} /></button>
+                )}
+                <button className="icon-danger" onClick={() => void removeCatalog(catalog)} disabled={busy} aria-label="Elimina catalogo"><Trash2 size={17} /></button>
+              </div>
             </article>
           )
         })}

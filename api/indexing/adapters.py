@@ -88,6 +88,32 @@ class TextLine:
     y1: float
 
 
+def looks_like_parts_page(lines: Sequence[TextLine]) -> bool:
+    text = normalized(" ".join(line.text for line in lines))
+    header_hits = sum(
+        term in text
+        for term in (
+            "item",
+            "position",
+            "repere",
+            "reference",
+            "part number",
+            "code",
+            "designation",
+            "description",
+            "quantity",
+            "qty",
+            "qte",
+        )
+    )
+    code_hits = sum(
+        _valid_code(word[4])
+        for line in lines
+        for word in line.words
+    )
+    return header_hits >= 2 or code_hits >= 2
+
+
 @dataclass
 class ExtractedPart:
     code: str
@@ -238,6 +264,8 @@ class BaseAdapter:
             reasons.append("insufficient_text")
         if not parts and text_chars >= 80:
             reasons.append("no_rows")
+            if looks_like_parts_page(lines):
+                reasons.append("unparsed_table")
         if parts and confidence < 0.68:
             reasons.append("low_confidence")
         return PageExtraction(parts, confidence, text_chars, self.name, reasons)
@@ -506,6 +534,8 @@ class CharlatteAdapter(BaseAdapter):
             reasons.append("insufficient_text")
         if not parts and text_chars >= 80:
             reasons.append("no_rows")
+            if looks_like_parts_page(lines):
+                reasons.append("unparsed_table")
         if parts and confidence < 0.72:
             reasons.append("low_confidence")
         return PageExtraction(parts, confidence, text_chars, self.name, reasons)
