@@ -715,20 +715,20 @@ begin
   )
   select
     p_catalog_id,
-    row.code,
-    row.description,
-    row.original_description,
-    row.quantity,
-    nullif(row.item, ''),
-    row.page_number,
-    row.category,
-    nullif(row.assembly_code, ''),
-    nullif(row.assembly_title, ''),
-    coalesce(nullif(row.source_type, ''), 'generic'),
-    row.confidence,
-    row.bbox,
-    coalesce(row.metadata, '{}'::jsonb)
-  from jsonb_to_recordset(p_rows) as row (
+    r.code,
+    r.description,
+    r.original_description,
+    r.quantity,
+    nullif(r.item, ''),
+    r.page_number,
+    r.category,
+    nullif(r.assembly_code, ''),
+    nullif(r.assembly_title, ''),
+    coalesce(nullif(r.source_type, ''), 'generic'),
+    r.confidence,
+    r.bbox,
+    coalesce(r.metadata, '{}'::jsonb)
+  from jsonb_to_recordset(p_rows) as r (
     code text,
     description text,
     original_description text,

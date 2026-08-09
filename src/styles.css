@@ -1868,7 +1868,8 @@ button {
   border-radius: 50%;
 }
 
-.status-dot.ready {
+.status-dot.ready,
+.status-dot.completed {
   background: #16a34a;
 }
 
@@ -1877,6 +1878,7 @@ button {
 }
 
 .status-dot.processing,
+.status-dot.running,
 .status-dot.queued {
   background: #f59e0b;
 }

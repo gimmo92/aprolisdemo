@@ -47,6 +47,8 @@ function statusLabel(status: string) {
   const labels: Record<string, string> = {
     uploaded: 'Caricato',
     queued: 'In coda',
+    running: 'Indicizzazione',
+    completed: 'Completato',
     processing: 'Indicizzazione',
     ready: 'Pronto',
     needs_review: 'Da verificare',
@@ -260,14 +262,15 @@ export function AdminCatalogs() {
       </div>
     )
   }
+  const supabaseClient = supabase
   if (!session) {
     return (
       <section className="admin-auth">
         <LogIn size={30} />
         <h2>{authMode === 'login' ? 'Accesso amministratore' : 'Crea account'}</h2>
         <form onSubmit={authenticate}>
-          <input type="email" placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)} required />
-          <input type="password" placeholder="Password" minLength={8} value={password} onChange={(e) => setPassword(e.target.value)} required />
+          <input name="email" type="email" placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)} required />
+          <input name="password" type="password" placeholder="Password" minLength={8} value={password} onChange={(e) => setPassword(e.target.value)} required />
           <button className="primary-button" disabled={busy}>
             {busy ? <LoaderCircle className="spin" size={18} /> : 'Continua'}
           </button>
@@ -287,7 +290,7 @@ export function AdminCatalogs() {
         <p>Promuovi questo utente dal SQL Editor Supabase, quindi aggiorna.</p>
         <div className="admin-actions">
           <button onClick={() => void refresh()}><RefreshCw size={16} /> Aggiorna</button>
-          <button onClick={() => void supabase.auth.signOut()}><LogOut size={16} /> Esci</button>
+          <button onClick={() => void supabaseClient.auth.signOut()}><LogOut size={16} /> Esci</button>
         </div>
       </div>
     )
@@ -300,26 +303,26 @@ export function AdminCatalogs() {
           <span className="eyebrow">Area riservata</span>
           <h2>Gestione cataloghi</h2>
         </div>
-        <button className="secondary-button" onClick={() => void supabase.auth.signOut()}>
+        <button className="secondary-button" onClick={() => void supabaseClient.auth.signOut()}>
           <LogOut size={16} /> Esci
         </button>
       </header>
       <form className="upload-card" onSubmit={submitCatalog}>
         <div className="upload-title"><FileUp /><div><h3>Nuovo catalogo PDF</h3><p>Upload riprendibile e indicizzazione automatica.</p></div></div>
         <label className="file-drop">
-          <input type="file" accept="application/pdf,.pdf" onChange={(e) => setFile(e.target.files?.[0])} required />
+          <input name="catalogPdf" type="file" accept="application/pdf,.pdf" onChange={(e) => setFile(e.target.files?.[0])} required />
           <FileUp />
           <strong>{file?.name || 'Seleziona o trascina un PDF'}</strong>
           <span>Massimo 250 MB</span>
         </label>
         <div className="metadata-grid">
-          <label>Brand<input value={form.brand} onChange={(e) => setForm({ ...form, brand: e.target.value })} required /></label>
-          <label>Modello<input value={form.model} onChange={(e) => setForm({ ...form, model: e.target.value })} required /></label>
-          <label>Versione<input value={form.version} onChange={(e) => setForm({ ...form, version: e.target.value })} /></label>
-          <label>Revisione<input value={form.revision} onChange={(e) => setForm({ ...form, revision: e.target.value })} /></label>
-          <label>Cliente<input value={form.customer} onChange={(e) => setForm({ ...form, customer: e.target.value })} /></label>
-          <label>Ordine / AR<input value={form.orderReference} onChange={(e) => setForm({ ...form, orderReference: e.target.value })} /></label>
-          <label className="wide">Matricole<textarea value={form.serialNumbers} onChange={(e) => setForm({ ...form, serialNumbers: e.target.value })} placeholder="13510073, 13510074" required /></label>
+          <label>Brand<input name="brand" value={form.brand} onChange={(e) => setForm({ ...form, brand: e.target.value })} required /></label>
+          <label>Modello<input name="model" value={form.model} onChange={(e) => setForm({ ...form, model: e.target.value })} required /></label>
+          <label>Versione<input name="version" value={form.version} onChange={(e) => setForm({ ...form, version: e.target.value })} /></label>
+          <label>Revisione<input name="revision" value={form.revision} onChange={(e) => setForm({ ...form, revision: e.target.value })} /></label>
+          <label>Cliente<input name="customer" value={form.customer} onChange={(e) => setForm({ ...form, customer: e.target.value })} /></label>
+          <label>Ordine / AR<input name="orderReference" value={form.orderReference} onChange={(e) => setForm({ ...form, orderReference: e.target.value })} /></label>
+          <label className="wide">Matricole<textarea name="serialNumbers" value={form.serialNumbers} onChange={(e) => setForm({ ...form, serialNumbers: e.target.value })} placeholder="13510073, 13510074" required /></label>
         </div>
         {busy && progress > 0 && <div className="upload-progress"><span style={{ width: `${progress}%` }} /></div>}
         <button className="primary-button" disabled={busy || !file}>
