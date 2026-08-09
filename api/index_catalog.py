@@ -1708,7 +1708,10 @@ class handler(BaseHTTPRequestHandler):
             catalog = catalogs[0]
 
             status = str(job.get("status") or "")
-            if status not in {"queued", "failed"}:
+            retrying_review = (
+                status == "completed" and catalog.get("status") == "needs_review"
+            )
+            if status not in {"queued", "failed"} and not retrying_review:
                 raise IndexingError(
                     409,
                     "JOB_NOT_RUNNABLE",

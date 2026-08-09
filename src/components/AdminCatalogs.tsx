@@ -230,8 +230,10 @@ export function AdminCatalogs() {
   }
 
   async function retryCatalog(catalog: AdminCatalog) {
-    const failedJob = catalog.ingestion_jobs?.find((job) => job.status === 'failed')
-    if (!failedJob || !authHeaders) return
+    const retryableJob = catalog.ingestion_jobs?.find((job) =>
+      ['failed', 'completed'].includes(job.status),
+    )
+    if (!retryableJob || !authHeaders) return
     setBusy(true)
     setMessage(`Nuova indicizzazione di ${catalog.original_filename}…`)
     try {
@@ -240,7 +242,7 @@ export function AdminCatalogs() {
         headers: authHeaders,
         body: JSON.stringify({
           catalogId: catalog.id,
-          jobId: failedJob.id,
+          jobId: retryableJob.id,
         }),
       })
       const payload = await response.json()
@@ -349,7 +351,7 @@ export function AdminCatalogs() {
               <span className="status-badge">{state === 'ready' && <CheckCircle2 size={14} />}{statusLabel(state)} {job?.progress ? `${job.progress}%` : ''}</span>
               <span>{catalog.part_count || 0} ricambi</span>
               <div className="admin-row-actions">
-                {state === 'failed' && (
+                {['failed', 'needs_review'].includes(state) && (
                   <button className="icon-retry" onClick={() => void retryCatalog(catalog)} disabled={busy} aria-label="Riprova indicizzazione"><RefreshCw size={17} /></button>
                 )}
                 <button className="icon-danger" onClick={() => void removeCatalog(catalog)} disabled={busy} aria-label="Elimina catalogo"><Trash2 size={17} /></button>
