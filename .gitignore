@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.vite/
+*.local
+*.log
+
+# I cataloghi originali restano locali: possono essere pesanti o riservati.
+Cataloghi ricambi/
+
+# File di sistema e IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
