@@ -11,6 +11,7 @@ export type CatalogInfo = {
   documentName: string
   documentPages: number
   partCount: number
+  pdfAvailable?: boolean
 }
 
 export type ChatHistoryItem = {
@@ -26,7 +27,7 @@ export type CatalogPart = {
   item: string
   page: number
   category: string
-  sourceType: 'mechanical' | 'electrical'
+  sourceType: 'mechanical' | 'electrical' | 'generic'
   assemblyCode?: string
   assemblyTitle?: string
 }
@@ -36,7 +37,7 @@ export type PartsIndexResponse = {
   parts: CatalogPart[]
   filters: {
     categories: string[]
-    sourceTypes: Array<'mechanical' | 'electrical'>
+    sourceTypes: Array<'mechanical' | 'electrical' | 'generic'>
     pageMin: number
     pageMax: number
   }

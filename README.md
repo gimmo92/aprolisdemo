@@ -1,9 +1,9 @@
 # Apròlis Parts Finder
 
-MVP web con retrieval agentico per trovare un ricambio partendo dalla matricola
-del mezzo. Claude Sonnet 5 interpreta la richiesta, interroga un indice locale
-tramite tool-use e restituisce codice, descrizione, quantità, riferimento e
-pagina del documento originale.
+Web app con retrieval agentico per trovare un ricambio partendo dalla matricola
+del mezzo. Claude interpreta la richiesta e interroga l'indice Supabase; gli
+amministratori possono caricare PDF privati con upload riprendibile TUS e
+indicizzazione automatica multi-brand.
 
 ## Demo inclusa
 
@@ -20,11 +20,13 @@ riservati. Lo script `scripts/index_catalogs.py` genera l'indice distribuibile
 
 ## Architettura
 
-1. `GET /api/catalog` verifica la matricola senza coinvolgere l'LLM.
-2. `POST /api/chat` invia a Claude solo catalogo, richiesta e cronologia breve.
-3. Claude chiama il tool server-side `search_parts`.
-4. Il retriever cerca esclusivamente nell'indice della matricola verificata.
-5. I dati mostrati dalla UI provengono dal tool, non dal testo generato.
+1. Supabase Auth e RLS proteggono la tab **Gestione cataloghi**.
+2. I PDF restano nel bucket privato `catalogs`; il browser usa upload TUS da 6 MB.
+3. `POST /api/index_catalog` valida e indicizza Charlatte, Hangcha, Movexx e
+   Fiorentini con parser deterministici e fallback Claude sulle pagine dubbie.
+4. `GET /api/catalog`, `GET /api/parts` e il tool di `POST /api/chat` leggono
+   Postgres, filtrati per matricola. L'indice JSON resta un fallback temporaneo.
+5. `GET /api/pdf` crea un URL firmato di cinque minuti e apre la pagina citata.
 
 ## Avvio locale
 
@@ -45,17 +47,22 @@ Copiare `.env.example` in `.env.local` e inserire:
 ```dotenv
 ANTHROPIC_API_KEY=sk-ant-...
 ANTHROPIC_MODEL=claude-sonnet-5
+VITE_SUPABASE_URL=https://project.supabase.co
+VITE_SUPABASE_PUBLISHABLE_KEY=sb_publishable_...
+SUPABASE_URL=https://project.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=sb_secret_...
 ```
 
-La chiave è letta soltanto dalla Vercel Function. Non usare mai il prefisso
-`VITE_`, perché renderebbe il valore accessibile al browser.
+Solo URL e publishable key hanno il prefisso `VITE_`. La chiave Anthropic e la
+service-role Supabase sono server-side e non devono mai avere quel prefisso.
 
 Su Vercel:
 
 1. aprire il progetto e andare in **Settings → Environment Variables**;
-2. aggiungere `ANTHROPIC_API_KEY` come valore **Sensitive**;
+2. aggiungere `ANTHROPIC_API_KEY` e `SUPABASE_SERVICE_ROLE_KEY` come
+   valori **Sensitive**;
 3. abilitarla per Production, Preview e Development;
-4. aggiungere `ANTHROPIC_MODEL` con valore `claude-sonnet-5`;
+4. aggiungere le altre variabili elencate in `.env.example`;
 5. avviare un nuovo deployment.
 
 Per sincronizzare le variabili in locale:
@@ -64,6 +71,36 @@ Per sincronizzare le variabili in locale:
 npx vercel link
 npx vercel env pull .env.local
 ```
+
+## Bootstrap Supabase
+
+1. creare un progetto Supabase e, con la CLI collegata, eseguire:
+
+   ```bash
+   npx supabase link --project-ref <project-ref>
+   npx supabase db push
+   ```
+
+2. creare il primo utente dalla tab **Gestione cataloghi** o da Auth;
+3. nel SQL Editor sostituire l'email placeholder ed eseguire
+   `supabase/seed.sql` per promuovere quell'utente ad amministratore;
+4. configurare le quattro variabili Supabase su Vercel e ridistribuire.
+
+La migration crea tabelle, indici full-text, bucket privato, policy RLS e RPC
+server-side. L'upload è limitato a PDF da 250 MB. Il job termina `ready`,
+`needs_review` oppure `failed`, con report e pagine da verificare.
+
+### Import dell'indice T135 esistente
+
+Dopo il bootstrap e la promozione admin:
+
+```bash
+LEGACY_CATALOG_PDF="/percorso/catalogo.pdf" npm run import:supabase
+```
+
+Senza `LEGACY_CATALOG_PDF` vengono importati i dati, ma il PDF deve già trovarsi
+nel percorso indicato da `LEGACY_CATALOG_STORAGE_PATH`. L'import usa la RPC
+atomica `replace_catalog_parts`.
 
 ## Verifica
 

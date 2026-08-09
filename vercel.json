@@ -2,6 +2,12 @@
   "functions": {
     "api/chat.ts": {
       "maxDuration": 30
+    },
+    "api/index_catalog.py": {
+      "maxDuration": 300
+    },
+    "api/admin/catalogs.ts": {
+      "maxDuration": 60
     }
   }
 }

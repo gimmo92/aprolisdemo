@@ -181,6 +181,7 @@ export default function PartsCatalog({ serial }: Props) {
             <option value="">Tutti</option>
             <option value="mechanical">Meccanico</option>
             <option value="electrical">Elettrico</option>
+            <option value="generic">Generico / AI</option>
           </select>
         </label>
         <label className="page-filter">
@@ -240,14 +241,31 @@ export default function PartsCatalog({ serial }: Props) {
                 <td data-label="Posizione">{part.item}</td>
                 <td data-label="Tipo">
                   <span className={`source-badge ${part.sourceType}`}>
-                    {part.sourceType === 'mechanical' ? 'Meccanico' : 'Elettrico'}
+                    {part.sourceType === 'mechanical'
+                      ? 'Meccanico'
+                      : part.sourceType === 'electrical'
+                        ? 'Elettrico'
+                        : 'Generico'}
                   </span>
                 </td>
                 <td data-label="Riferimento PDF">
-                  <span className="pdf-reference" title={catalog?.documentName}>
-                    <FileText size={15} />
-                    Pagina {part.page} / {catalog?.documentPages}
-                  </span>
+                  {catalog?.pdfAvailable ? (
+                    <a
+                      className="pdf-reference"
+                      href={`/api/pdf?catalogId=${encodeURIComponent(catalog.id)}&page=${part.page}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      title={`Apri ${catalog.documentName}`}
+                    >
+                      <FileText size={15} />
+                      Apri pagina {part.page}
+                    </a>
+                  ) : (
+                    <span className="pdf-reference" title={catalog?.documentName}>
+                      <FileText size={15} />
+                      Pagina {part.page} / {catalog?.documentPages}
+                    </span>
+                  )}
                 </td>
               </tr>
             ))}

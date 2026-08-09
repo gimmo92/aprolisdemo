@@ -2,6 +2,11 @@ import Anthropic from '@anthropic-ai/sdk'
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { z } from 'zod'
 import { findCatalog, searchParts } from './lib/retrieval.js'
+import {
+  findSupabaseCatalog,
+  searchSupabaseParts,
+} from './lib/supabase-retrieval.js'
+import { isSupabaseConfigured } from './lib/supabase.js'
 import type { IndexedPart } from './lib/types.js'
 
 const requestSchema = z.object({
@@ -156,7 +161,11 @@ export default async function handler(
   }
 
   const { serial, query, history } = parsed.data
-  const catalog = findCatalog(serial)
+  const localCatalog = findCatalog(serial)
+  const remoteCatalog = isSupabaseConfigured()
+    ? await findSupabaseCatalog(serial)
+    : undefined
+  const catalog = remoteCatalog?.catalog || localCatalog
   if (!catalog) {
     return response.status(404).json({
       error: 'Matricola non presente nei cataloghi indicizzati.',
@@ -209,12 +218,28 @@ export default async function handler(
       )
       if (!toolUses.length) break
 
-      const toolResults: Anthropic.Messages.ToolResultBlockParam[] = toolUses.map(
-        (toolUse) => {
+      const toolResults: Anthropic.Messages.ToolResultBlockParam[] =
+        await Promise.all(
+          toolUses.map(async (toolUse) => {
           const toolInput = toolInputSchema.safeParse(toolUse.input)
-          const parts = toolInput.success
-            ? searchParts(serial, toolInput.data.query, toolInput.data.limit)
-            : []
+          let parts: IndexedPart[] = []
+          if (toolInput.success) {
+            if (isSupabaseConfigured()) {
+              try {
+                parts =
+                  (await searchSupabaseParts(
+                    serial,
+                    toolInput.data.query,
+                    toolInput.data.limit,
+                  )) || []
+              } catch (error) {
+                console.error('Supabase search failed; using bundled fallback', error)
+              }
+            }
+            if (!parts.length && localCatalog) {
+              parts = searchParts(serial, toolInput.data.query, toolInput.data.limit)
+            }
+          }
 
           for (const part of parts) {
             retrieved.set(`${part.code}|${part.item}|${part.page}`, part)
@@ -232,8 +257,8 @@ export default async function handler(
               parts: parts.map(publicPart),
             }),
           }
-        },
-      )
+          }),
+        )
 
       messages.push({ role: 'assistant', content: aiMessage.content })
       messages.push({ role: 'user', content: toolResults })

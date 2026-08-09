@@ -1,0 +1,1295 @@
+"""Authenticated Vercel endpoint for multi-brand PDF catalog ingestion."""
+
+from __future__ import annotations
+
+import base64
+import hashlib
+import json
+import os
+import re
+import time
+import uuid
+from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler
+from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.parse import quote, urlencode
+from urllib.request import Request, urlopen
+
+import pymupdf as fitz
+
+try:
+    from .indexing import ExtractedPart, PageExtraction, select_adapter
+except ImportError:  # Allows local loading from inside the api directory.
+    from indexing import ExtractedPart, PageExtraction, select_adapter
+
+
+DEFAULT_MAX_PDF_BYTES = 250 * 1024 * 1024
+DEFAULT_BATCH_SIZE = 250
+MIN_TEXT_CHARACTERS = 80
+MIN_PAGE_CONFIDENCE = 0.68
+UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-"
+    r"[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+    re.I,
+)
+AI_CODE_RE = re.compile(r"^(?=.{3,80}$)(?=.*\d)[A-Z0-9][A-Z0-9._/+()\-]*$", re.I)
+
+
+class IndexingError(Exception):
+    def __init__(
+        self,
+        status: int,
+        code: str,
+        message: str,
+        details: Any | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.status = status
+        self.code = code
+        self.message = message
+        self.details = details
+
+    def payload(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {"error": self.message, "code": self.code}
+        if self.details is not None:
+            payload["details"] = self.details
+        return payload
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = int(raw)
+    except ValueError as error:
+        raise IndexingError(
+            503,
+            "INVALID_CONFIGURATION",
+            f"{name} deve essere un numero intero.",
+        ) from error
+    if not minimum <= value <= maximum:
+        raise IndexingError(
+            503,
+            "INVALID_CONFIGURATION",
+            f"{name} deve essere compreso tra {minimum} e {maximum}.",
+        )
+    return value
+
+
+def _required_environment() -> tuple[str, str]:
+    url = os.environ.get("SUPABASE_URL", "").strip().rstrip("/")
+    service_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+    missing = [
+        name
+        for name, value in (
+            ("SUPABASE_URL", url),
+            ("SUPABASE_SERVICE_ROLE_KEY", service_key),
+        )
+        if not value
+    ]
+    if missing:
+        raise IndexingError(
+            503,
+            "SUPABASE_NOT_CONFIGURED",
+            "Supabase non configurato per l'indicizzazione.",
+            {"missing": missing},
+        )
+    if not url.startswith(("https://", "http://")):
+        raise IndexingError(
+            503,
+            "INVALID_CONFIGURATION",
+            "SUPABASE_URL non è un URL valido.",
+        )
+    return url, service_key
+
+
+def _decode_json(data: bytes, context: str) -> Any:
+    if not data:
+        return None
+    try:
+        return json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise IndexingError(
+            502,
+            "UPSTREAM_INVALID_JSON",
+            f"Risposta JSON non valida da {context}.",
+        ) from error
+
+
+class SupabaseREST:
+    def __init__(self, url: str, service_key: str) -> None:
+        self.url = url
+        self.service_key = service_key
+        self.timeout = _env_int("INDEX_HTTP_TIMEOUT_SECONDS", 30, 5, 120)
+
+    def _call(
+        self,
+        method: str,
+        path: str,
+        *,
+        bearer: str | None = None,
+        body: Any | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> tuple[int, dict[str, str], bytes]:
+        request_headers = {
+            "Accept": "application/json",
+            "apikey": self.service_key,
+            "Authorization": f"Bearer {bearer or self.service_key}",
+        }
+        if headers:
+            request_headers.update(headers)
+        encoded: bytes | None = None
+        if body is not None:
+            encoded = json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode(
+                "utf-8"
+            )
+            request_headers["Content-Type"] = "application/json"
+        request = Request(
+            f"{self.url}{path}", data=encoded, headers=request_headers, method=method
+        )
+        try:
+            with urlopen(request, timeout=self.timeout) as response:
+                return response.status, dict(response.headers.items()), response.read()
+        except HTTPError as error:
+            response_body = error.read()
+            details: Any
+            try:
+                details = json.loads(response_body.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                details = {"upstream": response_body[:500].decode("utf-8", "replace")}
+            raise IndexingError(
+                502 if error.code >= 500 else error.code,
+                "SUPABASE_REQUEST_FAILED",
+                "Richiesta Supabase non riuscita.",
+                {"status": error.code, "response": details},
+            ) from error
+        except (URLError, TimeoutError) as error:
+            raise IndexingError(
+                502,
+                "SUPABASE_UNAVAILABLE",
+                "Supabase non è raggiungibile.",
+                {"reason": str(error.reason) if isinstance(error, URLError) else str(error)},
+            ) from error
+
+    def authenticate_admin(self, user_token: str) -> dict[str, Any]:
+        try:
+            _, _, data = self._call("GET", "/auth/v1/user", bearer=user_token)
+        except IndexingError as error:
+            if error.status in {401, 403}:
+                raise IndexingError(
+                    401, "INVALID_SESSION", "Sessione Supabase non valida."
+                ) from error
+            raise
+        user = _decode_json(data, "Supabase Auth")
+        user_id = user.get("id") if isinstance(user, dict) else None
+        if not isinstance(user_id, str):
+            raise IndexingError(401, "INVALID_SESSION", "Sessione Supabase non valida.")
+
+        profiles = self.select("profiles", {"id": f"eq.{user_id}", "select": "*"})
+        if not profiles:
+            raise IndexingError(
+                403,
+                "ADMIN_REQUIRED",
+                "Profilo amministratore non trovato.",
+            )
+        profile = profiles[0]
+        if profile.get("role") != "admin" and profile.get("is_admin") is not True:
+            raise IndexingError(
+                403,
+                "ADMIN_REQUIRED",
+                "Accesso riservato agli amministratori.",
+            )
+        return user
+
+    def select(self, table: str, query: dict[str, str]) -> list[dict[str, Any]]:
+        path = f"/rest/v1/{quote(table, safe='')}?{urlencode(query)}"
+        _, _, data = self._call(
+            "GET", path, headers={"Accept-Profile": "public"}
+        )
+        value = _decode_json(data, f"PostgREST/{table}")
+        if not isinstance(value, list):
+            raise IndexingError(
+                502,
+                "SUPABASE_INVALID_RESPONSE",
+                f"Risposta inattesa per la tabella {table}.",
+            )
+        return [row for row in value if isinstance(row, dict)]
+
+    def patch(
+        self,
+        table: str,
+        query: dict[str, str],
+        values: dict[str, Any],
+        *,
+        return_rows: bool = False,
+    ) -> list[dict[str, Any]]:
+        path = f"/rest/v1/{quote(table, safe='')}?{urlencode(query)}"
+        prefer = "return=representation" if return_rows else "return=minimal"
+        _, _, data = self._call(
+            "PATCH",
+            path,
+            body=values,
+            headers={"Content-Profile": "public", "Prefer": prefer},
+        )
+        if not return_rows:
+            return []
+        value = _decode_json(data, f"PostgREST/{table}")
+        return value if isinstance(value, list) else []
+
+    def delete(self, table: str, query: dict[str, str]) -> None:
+        path = f"/rest/v1/{quote(table, safe='')}?{urlencode(query)}"
+        self._call(
+            "DELETE",
+            path,
+            headers={"Content-Profile": "public", "Prefer": "return=minimal"},
+        )
+
+    def upsert(self, table: str, rows: list[dict[str, Any]]) -> None:
+        if not rows:
+            return
+        query = urlencode({"on_conflict": "id"})
+        self._call(
+            "POST",
+            f"/rest/v1/{quote(table, safe='')}?{query}",
+            body=rows,
+            headers={
+                "Content-Profile": "public",
+                "Prefer": "resolution=merge-duplicates,return=minimal",
+            },
+        )
+
+    def replace_catalog_parts(
+        self, catalog_id: str, rows: list[dict[str, Any]]
+    ) -> int:
+        _, _, data = self._call(
+            "POST",
+            "/rest/v1/rpc/replace_catalog_parts",
+            body={"p_catalog_id": catalog_id, "p_rows": rows},
+            headers={
+                "Content-Profile": "public",
+                "Accept-Profile": "public",
+                "Prefer": "return=representation",
+            },
+        )
+        value = _decode_json(data, "PostgREST/replace_catalog_parts")
+        if not isinstance(value, int):
+            raise IndexingError(
+                502,
+                "SUPABASE_INVALID_RESPONSE",
+                "La sostituzione atomica dei ricambi ha restituito un valore inatteso.",
+            )
+        return value
+
+    def download_private_object(self, bucket: str, storage_path: str) -> tuple[bytes, str]:
+        if (
+            not storage_path
+            or storage_path.startswith("/")
+            or any(part in {"", ".", ".."} for part in storage_path.split("/"))
+        ):
+            raise IndexingError(
+                422,
+                "INVALID_STORAGE_PATH",
+                "Percorso del PDF nel bucket non valido.",
+            )
+        maximum = _env_int(
+            "INDEX_MAX_PDF_BYTES", DEFAULT_MAX_PDF_BYTES, 1, 250 * 1024 * 1024
+        )
+        object_path = (
+            f"/storage/v1/object/authenticated/{quote(bucket, safe='')}/"
+            f"{quote(storage_path, safe='/')}"
+        )
+        request = Request(
+            f"{self.url}{object_path}",
+            headers={
+                "apikey": self.service_key,
+                "Authorization": f"Bearer {self.service_key}",
+                "Accept": "application/pdf,application/octet-stream",
+            },
+            method="GET",
+        )
+        try:
+            with urlopen(request, timeout=self.timeout) as response:
+                content_length = response.headers.get("Content-Length")
+                if content_length and int(content_length) > maximum:
+                    raise IndexingError(
+                        413,
+                        "PDF_TOO_LARGE",
+                        "Il PDF supera la dimensione massima consentita.",
+                        {"maximumBytes": maximum},
+                    )
+                chunks: list[bytes] = []
+                size = 0
+                while chunk := response.read(1024 * 1024):
+                    size += len(chunk)
+                    if size > maximum:
+                        raise IndexingError(
+                            413,
+                            "PDF_TOO_LARGE",
+                            "Il PDF supera la dimensione massima consentita.",
+                            {"maximumBytes": maximum},
+                        )
+                    chunks.append(chunk)
+                mime = response.headers.get("Content-Type", "").split(";", 1)[0].lower()
+                return b"".join(chunks), mime
+        except IndexingError:
+            raise
+        except HTTPError as error:
+            error.read()
+            raise IndexingError(
+                502 if error.code >= 500 else error.code,
+                "PDF_DOWNLOAD_FAILED",
+                "Download del PDF privato non riuscito.",
+                {"status": error.code},
+            ) from error
+        except (URLError, TimeoutError, ValueError) as error:
+            raise IndexingError(
+                502,
+                "PDF_DOWNLOAD_FAILED",
+                "Download del PDF privato non riuscito.",
+                {"reason": str(error)},
+            ) from error
+
+
+def _catalog_brand(catalog: dict[str, Any]) -> str:
+    brand = catalog.get("brand") or catalog.get("manufacturer")
+    if isinstance(brand, dict):
+        brand = brand.get("name")
+    return str(brand or "")
+
+
+def _catalog_filename(catalog: dict[str, Any]) -> str:
+    return str(
+        catalog.get("original_filename")
+        or catalog.get("filename")
+        or catalog.get("document_name")
+        or ""
+    )
+
+
+def _validate_pdf(
+    content: bytes, downloaded_mime: str, catalog: dict[str, Any]
+) -> tuple[str, fitz.Document]:
+    if not content:
+        raise IndexingError(422, "EMPTY_PDF", "Il file PDF è vuoto.")
+    declared_size = catalog.get("file_size")
+    if declared_size is None:
+        declared_size = catalog.get("file_size_bytes")
+    if declared_size is not None:
+        try:
+            expected_size = int(declared_size)
+        except (TypeError, ValueError) as error:
+            raise IndexingError(
+                422,
+                "INVALID_PDF_SIZE",
+                "La dimensione registrata del PDF non è valida.",
+            ) from error
+        if expected_size <= 0:
+            raise IndexingError(
+                422,
+                "INVALID_PDF_SIZE",
+                "La dimensione registrata del PDF deve essere positiva.",
+            )
+        if expected_size != len(content):
+            raise IndexingError(
+                409,
+                "PDF_SIZE_MISMATCH",
+                "La dimensione del PDF non corrisponde a quella registrata.",
+                {"expected": expected_size, "actual": len(content)},
+            )
+    declared_mime = str(catalog.get("mime_type") or "application/pdf").lower()
+    if declared_mime != "application/pdf":
+        raise IndexingError(
+            415,
+            "INVALID_PDF_MIME",
+            "Il catalogo non dichiara un MIME PDF.",
+            {"mimeType": declared_mime},
+        )
+    allowed_download_mimes = {"application/pdf", "application/octet-stream", ""}
+    if downloaded_mime not in allowed_download_mimes:
+        raise IndexingError(
+            415,
+            "INVALID_PDF_MIME",
+            "Il file scaricato non ha un MIME PDF.",
+            {"mimeType": downloaded_mime},
+        )
+    if content.lstrip()[:5] != b"%PDF-":
+        raise IndexingError(
+            415,
+            "INVALID_PDF_SIGNATURE",
+            "Il file scaricato non contiene una firma PDF valida.",
+        )
+
+    checksum = hashlib.sha256(content).hexdigest()
+    expected = str(catalog.get("checksum_sha256") or "").strip().lower()
+    if expected and expected != checksum:
+        raise IndexingError(
+            409,
+            "PDF_CHECKSUM_MISMATCH",
+            "Il checksum del PDF non corrisponde a quello registrato.",
+            {"expected": expected, "actual": checksum},
+        )
+    try:
+        document = fitz.open(stream=content, filetype="pdf")
+    except Exception as error:
+        raise IndexingError(
+            422, "INVALID_PDF", "PyMuPDF non riesce ad aprire il PDF."
+        ) from error
+    if document.needs_pass:
+        document.close()
+        raise IndexingError(
+            422, "ENCRYPTED_PDF", "I PDF protetti da password non sono supportati."
+        )
+    if document.page_count < 1:
+        document.close()
+        raise IndexingError(422, "EMPTY_PDF", "Il PDF non contiene pagine.")
+    return checksum, document
+
+
+def _mini_pdf(document: fitz.Document, page_index: int) -> bytes:
+    chunk = fitz.open()
+    try:
+        chunk.insert_pdf(document, from_page=page_index, to_page=page_index)
+        return chunk.tobytes(garbage=4, deflate=True)
+    finally:
+        chunk.close()
+
+
+def _ai_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+            "parts": {
+                "type": "array",
+                "maxItems": 500,
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "code": {"type": "string", "minLength": 1, "maxLength": 80},
+                        "description": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 1000,
+                        },
+                        "original_description": {
+                            "type": "string",
+                            "maxLength": 1000,
+                        },
+                        "quantity": {
+                            "anyOf": [
+                                {"type": "number", "minimum": 0},
+                                {"type": "null"},
+                            ]
+                        },
+                        "item": {"type": "string", "maxLength": 100},
+                        "category": {"type": "string", "maxLength": 300},
+                        "assembly_code": {"type": "string", "maxLength": 100},
+                        "assembly_title": {"type": "string", "maxLength": 300},
+                    },
+                    "required": [
+                        "code",
+                        "description",
+                        "original_description",
+                        "quantity",
+                        "item",
+                        "category",
+                        "assembly_code",
+                        "assembly_title",
+                    ],
+                },
+            },
+        },
+        "required": ["confidence", "parts"],
+    }
+
+
+def _anthropic_parts(
+    mini_pdf: bytes,
+    page_number: int,
+    brand: str,
+    api_key: str,
+    model: str,
+) -> list[ExtractedPart]:
+    prompt = (
+        "Extract only spare-part table rows visibly present in this one-page PDF. "
+        "Never infer or complete missing codes. Keep the original description. "
+        f"Brand hint: {brand or 'unknown'}. Source page: {page_number}. "
+        "Return an empty parts array when there is no parts table."
+    )
+    payload = {
+        "model": model,
+        "max_tokens": 4096,
+        "temperature": 0,
+        "system": (
+            "You are a strict spare-parts table transcriber. Your response must "
+            "conform exactly to the supplied JSON schema."
+        ),
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "document",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "application/pdf",
+                            "data": base64.b64encode(mini_pdf).decode("ascii"),
+                        },
+                    },
+                    {"type": "text", "text": prompt},
+                ],
+            }
+        ],
+        "output_config": {
+            "format": {
+                "type": "json_schema",
+                "schema": _ai_schema(),
+            }
+        },
+    }
+    timeout = _env_int("INDEX_AI_TIMEOUT_SECONDS", 45, 10, 120)
+    request = Request(
+        "https://api.anthropic.com/v1/messages",
+        data=json.dumps(payload, separators=(",", ":")).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+        },
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            message = _decode_json(response.read(), "Anthropic")
+    except HTTPError as error:
+        body = error.read()
+        try:
+            upstream = json.loads(body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            upstream = {"message": body[:300].decode("utf-8", "replace")}
+        code = {
+            401: "ANTHROPIC_INVALID_KEY",
+            403: "ANTHROPIC_FORBIDDEN",
+            404: "ANTHROPIC_MODEL_NOT_FOUND",
+            429: "ANTHROPIC_RATE_LIMIT",
+        }.get(error.code, "ANTHROPIC_REQUEST_FAILED")
+        raise IndexingError(
+            502 if error.code >= 500 else error.code,
+            code,
+            "Fallback Anthropic non riuscito.",
+            {"status": error.code, "response": upstream},
+        ) from error
+    except (URLError, TimeoutError) as error:
+        raise IndexingError(
+            502,
+            "ANTHROPIC_UNAVAILABLE",
+            "Anthropic non è raggiungibile.",
+            {"reason": str(error)},
+        ) from error
+
+    blocks = message.get("content") if isinstance(message, dict) else None
+    text_blocks = [
+        block.get("text")
+        for block in blocks or []
+        if isinstance(block, dict)
+        and block.get("type") == "text"
+        and isinstance(block.get("text"), str)
+    ]
+    if len(text_blocks) != 1:
+        raise IndexingError(
+            502,
+            "ANTHROPIC_INVALID_JSON",
+            "Anthropic non ha restituito un singolo oggetto JSON.",
+        )
+    try:
+        result = json.loads(text_blocks[0])
+    except json.JSONDecodeError as error:
+        raise IndexingError(
+            502,
+            "ANTHROPIC_INVALID_JSON",
+            "Anthropic ha restituito JSON non valido.",
+        ) from error
+    if not isinstance(result, dict) or set(result) != {"confidence", "parts"}:
+        raise IndexingError(
+            502,
+            "ANTHROPIC_INVALID_JSON",
+            "La risposta Anthropic non rispetta lo schema richiesto.",
+        )
+    confidence = result.get("confidence")
+    rows = result.get("parts")
+    if (
+        not isinstance(confidence, (int, float))
+        or isinstance(confidence, bool)
+        or not 0 <= confidence <= 1
+        or not isinstance(rows, list)
+        or len(rows) > 500
+    ):
+        raise IndexingError(
+            502,
+            "ANTHROPIC_INVALID_JSON",
+            "La risposta Anthropic contiene valori non validi.",
+        )
+
+    required = {
+        "code",
+        "description",
+        "original_description",
+        "quantity",
+        "item",
+        "category",
+        "assembly_code",
+        "assembly_title",
+    }
+    parts: list[ExtractedPart] = []
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict) or set(row) != required:
+            raise IndexingError(
+                502,
+                "ANTHROPIC_INVALID_JSON",
+                "Una riga Anthropic non rispetta lo schema richiesto.",
+                {"row": index},
+            )
+        code = row["code"]
+        description = row["description"]
+        quantity = row["quantity"]
+        string_fields = required - {"quantity"}
+        if (
+            any(not isinstance(row[field], str) for field in string_fields)
+            or not isinstance(code, str)
+            or not AI_CODE_RE.fullmatch(code.strip())
+            or not isinstance(description, str)
+            or not description.strip()
+            or (
+                quantity is not None
+                and (
+                    not isinstance(quantity, (int, float))
+                    or isinstance(quantity, bool)
+                    or quantity < 0
+                )
+            )
+        ):
+            raise IndexingError(
+                502,
+                "ANTHROPIC_INVALID_JSON",
+                "Una riga Anthropic contiene dati non validi.",
+                {"row": index},
+            )
+        parts.append(
+            ExtractedPart(
+                code=code,
+                description=description,
+                original_description=row["original_description"] or description,
+                quantity=quantity,
+                item=row["item"],
+                page=page_number,
+                category=row["category"] or "Ricambi",
+                assembly_code=row["assembly_code"],
+                assembly_title=row["assembly_title"],
+                source_type="ai",
+                confidence=float(confidence),
+                metadata={"extraction": "anthropic"},
+            )
+        )
+    return parts
+
+
+def _merge_parts(
+    deterministic: list[ExtractedPart], ai_parts: list[ExtractedPart]
+) -> list[ExtractedPart]:
+    unique: dict[tuple[str, str, int], ExtractedPart] = {}
+    for part in [*deterministic, *ai_parts]:
+        key = (part.code.casefold(), part.item.casefold(), part.page)
+        previous = unique.get(key)
+        if previous is None or part.confidence > previous.confidence:
+            unique[key] = part
+    return sorted(unique.values(), key=lambda part: (part.page, part.item, part.code))
+
+
+def _part_id(catalog_id: str, part: ExtractedPart) -> str:
+    identity = "|".join(
+        (
+            catalog_id,
+            part.code.casefold(),
+            str(part.page),
+            part.assembly_code.casefold(),
+            part.item.casefold(),
+        )
+    )
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, identity))
+
+
+def _part_row(
+    catalog_id: str, part: ExtractedPart, schema: str
+) -> dict[str, Any]:
+    source = {
+        "confidence": part.confidence,
+        "extraction": part.source_type,
+        "original_description": part.original_description,
+        "assembly_code": part.assembly_code,
+        "assembly_title": part.assembly_title,
+        "search_text": part.search_text,
+        **part.metadata,
+    }
+    if part.bbox:
+        source["bbox"] = [round(value, 2) for value in part.bbox]
+    common_id = _part_id(catalog_id, part)
+    if schema == "legacy":
+        source_type = (
+            part.source_type
+            if part.source_type in {"mechanical", "electrical"}
+            else "generic"
+        )
+        return {
+            "id": common_id,
+            "catalog_id": catalog_id,
+            "code": part.code,
+            "description": part.description,
+            "original_description": part.original_description,
+            "quantity": part.quantity,
+            "item": part.item or None,
+            "page_number": part.page,
+            "category": part.category,
+            "assembly_code": part.assembly_code or None,
+            "assembly_title": part.assembly_title or None,
+            "source_type": source_type,
+            "confidence": round(part.confidence, 3),
+            "bbox": (
+                [round(value, 2) for value in part.bbox] if part.bbox else None
+            ),
+            "metadata": source,
+        }
+    return {
+        "id": common_id,
+        "catalog_id": catalog_id,
+        "part_number": part.code,
+        "description": part.description,
+        "quantity": part.quantity,
+        "reference": part.original_description or None,
+        "category": part.category,
+        "assembly": part.assembly_title or None,
+        "figure_number": part.assembly_code or None,
+        "item_number": part.item or None,
+        "page_number": part.page,
+        "notes": None,
+        "source_data": source,
+    }
+
+
+def _parts_schema(catalog: dict[str, Any]) -> str:
+    configured = os.environ.get("INDEX_PARTS_SCHEMA", "auto").strip().lower()
+    if configured not in {"auto", "normalized", "legacy"}:
+        raise IndexingError(
+            503,
+            "INVALID_CONFIGURATION",
+            "INDEX_PARTS_SCHEMA deve essere auto, normalized o legacy.",
+        )
+    if configured != "auto":
+        return configured
+    # The normalized migration uses manufacturer/file_size_bytes; the earlier
+    # application schema uses brand/file_size and code/item columns.
+    return (
+        "normalized"
+        if "manufacturer" in catalog or "file_size_bytes" in catalog
+        else "legacy"
+    )
+
+
+def _job_update(
+    client: SupabaseREST,
+    job: dict[str, Any],
+    values: dict[str, Any],
+    *,
+    expected_status: str | None = None,
+    return_rows: bool = False,
+) -> list[dict[str, Any]]:
+    supported = set(job)
+    payload = {key: value for key, value in values.items() if key in supported}
+    # report is named error_details in the normalized migration.
+    if "report" in values and "report" not in supported and "error_details" in supported:
+        payload["error_details"] = values["report"]
+    query = {"id": f"eq.{job['id']}"}
+    if expected_status:
+        query["status"] = f"eq.{expected_status}"
+    return client.patch("ingestion_jobs", query, payload, return_rows=return_rows)
+
+
+def _catalog_update(
+    client: SupabaseREST,
+    catalog: dict[str, Any],
+    values: dict[str, Any],
+) -> None:
+    supported = set(catalog)
+    payload = {key: value for key, value in values.items() if key in supported}
+    if "metadata" in supported and "report" in values:
+        metadata = catalog.get("metadata")
+        if not isinstance(metadata, dict):
+            metadata = {}
+        payload["metadata"] = {**metadata, "indexing": values["report"]}
+    client.patch("catalogs", {"id": f"eq.{catalog['id']}"}, payload)
+
+
+def _failure_updates(
+    client: SupabaseREST | None,
+    job: dict[str, Any] | None,
+    catalog: dict[str, Any] | None,
+    error: IndexingError,
+) -> None:
+    if not client:
+        return
+    report = {
+        "outcome": "failed",
+        "code": error.code,
+        "message": error.message,
+        "details": error.details,
+        "failedAt": _utc_now(),
+    }
+    try:
+        if job:
+            _job_update(
+                client,
+                job,
+                {
+                    "status": "failed",
+                    "stage": "failed",
+                    "progress": min(int(job.get("progress") or 0), 99),
+                    "error_message": error.message,
+                    "report": report,
+                    "completed_at": _utc_now(),
+                },
+            )
+        if catalog:
+            _catalog_update(
+                client,
+                catalog,
+                {"status": "failed", "report": report, "processed_at": _utc_now()},
+            )
+    except Exception:
+        # Preserve the original, actionable error response.
+        pass
+
+
+def _extract(
+    client: SupabaseREST,
+    job: dict[str, Any],
+    catalog: dict[str, Any],
+    document: fitz.Document,
+    checksum: str,
+) -> tuple[list[ExtractedPart], dict[str, Any], str]:
+    brand = _catalog_brand(catalog)
+    adapter = select_adapter(brand, _catalog_filename(catalog))
+    page_results: list[PageExtraction] = []
+    deterministic_parts: list[ExtractedPart] = []
+    page_count = document.page_count
+
+    for page_index in range(page_count):
+        result = adapter.extract_page(document[page_index], page_index + 1)
+        page_results.append(result)
+        deterministic_parts.extend(result.parts)
+        if page_index == page_count - 1 or (page_index + 1) % 10 == 0:
+            progress = 10 + int(((page_index + 1) / page_count) * 50)
+            job["progress"] = progress
+            _job_update(
+                client,
+                job,
+                {
+                    "stage": "deterministic_extraction",
+                    "progress": progress,
+                    "processed_items": page_index + 1,
+                    "total_items": page_count,
+                },
+            )
+
+    suspect_indexes = [
+        index
+        for index, result in enumerate(page_results)
+        if result.text_characters < MIN_TEXT_CHARACTERS
+        or (bool(result.parts) and result.confidence < MIN_PAGE_CONFIDENCE)
+    ]
+    # Pages with actual low-confidence rows have priority over image-only pages.
+    suspect_indexes.sort(
+        key=lambda index: (
+            not bool(page_results[index].parts),
+            page_results[index].confidence,
+            index,
+        )
+    )
+    max_ai_pages = _env_int("INDEX_MAX_AI_PAGES", 80, 0, 500)
+    selected_ai_indexes = suspect_indexes[:max_ai_pages]
+    unresolved = set(suspect_indexes)
+    ai_parts: list[ExtractedPart] = []
+    ai_errors: list[dict[str, Any]] = []
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    model = (
+        os.environ.get("ANTHROPIC_INDEX_MODEL")
+        or os.environ.get("ANTHROPIC_MODEL")
+        or ""
+    ).strip()
+
+    if selected_ai_indexes and (not api_key or not model):
+        missing = [
+            name
+            for name, value in (
+                ("ANTHROPIC_API_KEY", api_key),
+                ("ANTHROPIC_INDEX_MODEL/ANTHROPIC_MODEL", model),
+            )
+            if not value
+        ]
+        ai_errors.append(
+            {
+                "code": "ANTHROPIC_NOT_CONFIGURED",
+                "message": "Fallback Anthropic non configurato.",
+                "missing": missing,
+            }
+        )
+        selected_ai_indexes = []
+
+    for position, page_index in enumerate(selected_ai_indexes):
+        try:
+            extracted = _anthropic_parts(
+                _mini_pdf(document, page_index),
+                page_index + 1,
+                brand,
+                api_key,
+                model,
+            )
+            ai_parts.extend(extracted)
+            # A schema-valid empty response also resolves a non-table page.
+            unresolved.discard(page_index)
+        except IndexingError as error:
+            ai_errors.append(
+                {
+                    "page": page_index + 1,
+                    "code": error.code,
+                    "message": error.message,
+                }
+            )
+        progress = 60 + int(((position + 1) / max(len(selected_ai_indexes), 1)) * 15)
+        job["progress"] = progress
+        _job_update(
+            client,
+            job,
+            {
+                "stage": "ai_fallback",
+                "progress": progress,
+                "processed_items": page_count,
+                "total_items": page_count,
+            },
+        )
+
+    parts = _merge_parts(deterministic_parts, ai_parts)
+    if not parts:
+        if ai_errors and ai_errors[0].get("code") == "ANTHROPIC_NOT_CONFIGURED":
+            raise IndexingError(
+                503,
+                "ANTHROPIC_NOT_CONFIGURED",
+                "Nessun ricambio deterministico e fallback Anthropic non configurato.",
+                ai_errors[0],
+            )
+        raise IndexingError(
+            422,
+            "NO_PARTS_EXTRACTED",
+            "L'indicizzazione non ha trovato righe ricambio verificabili.",
+            {"aiErrors": ai_errors},
+        )
+
+    outcome = "ready" if not unresolved and not ai_errors else "needs_review"
+    report = {
+        "outcome": outcome,
+        "adapter": adapter.name,
+        "checksumSha256": checksum,
+        "pages": page_count,
+        "parts": len(parts),
+        "deterministicParts": len(deterministic_parts),
+        "aiParts": len(ai_parts),
+        "aiPages": [index + 1 for index in selected_ai_indexes],
+        "suspectPages": [index + 1 for index in suspect_indexes],
+        "unresolvedPages": [index + 1 for index in sorted(unresolved)],
+        "aiErrors": ai_errors,
+        "limits": {
+            "maxAiPages": max_ai_pages,
+            "maxPdfBytes": _env_int(
+                "INDEX_MAX_PDF_BYTES",
+                DEFAULT_MAX_PDF_BYTES,
+                1,
+                250 * 1024 * 1024,
+            ),
+            "batchSize": _env_int(
+                "INDEX_PART_BATCH_SIZE", DEFAULT_BATCH_SIZE, 1, 1000
+            ),
+        },
+    }
+    return parts, report, outcome
+
+
+def _run_indexing(
+    client: SupabaseREST,
+    job: dict[str, Any],
+    catalog: dict[str, Any],
+) -> tuple[dict[str, Any], int]:
+    bucket = os.environ.get("SUPABASE_CATALOG_BUCKET", "catalogs").strip()
+    if not bucket:
+        raise IndexingError(
+            503,
+            "INVALID_CONFIGURATION",
+            "SUPABASE_CATALOG_BUCKET non può essere vuoto.",
+        )
+    storage_path = str(
+        catalog.get("storage_path")
+        or catalog.get("file_path")
+        or catalog.get("pdf_path")
+        or ""
+    )
+    _catalog_update(client, catalog, {"status": "processing"})
+    content, downloaded_mime = client.download_private_object(bucket, storage_path)
+    checksum, document = _validate_pdf(content, downloaded_mime, catalog)
+    try:
+        parts, report, outcome = _extract(client, job, catalog, document, checksum)
+        page_count = document.page_count
+    finally:
+        document.close()
+
+    schema = _parts_schema(catalog)
+    rows = [_part_row(str(catalog["id"]), part, schema) for part in parts]
+
+    # Delete + insert run in one Postgres transaction. A bad row or transport
+    # failure cannot leave a previously usable catalog partially replaced.
+    accepted = client.replace_catalog_parts(str(catalog["id"]), rows)
+    job["progress"] = 95
+    _job_update(
+        client,
+        job,
+        {
+            "stage": "database_upsert",
+            "progress": 95,
+            "processed_items": accepted,
+            "total_items": len(rows),
+        },
+    )
+
+    report["partsSchema"] = schema
+    report["databaseWrite"] = "atomic"
+    report["completedAt"] = _utc_now()
+    catalog_values = {
+        "status": outcome,
+        "checksum_sha256": checksum,
+        "page_count": page_count,
+        "part_count": len(rows),
+        "processed_at": _utc_now(),
+        "indexed_at": _utc_now(),
+        "report": report,
+    }
+    _catalog_update(client, catalog, catalog_values)
+
+    job_outcome = outcome if outcome in set(job.get("_allowed_final_statuses", [])) else "completed"
+    # Most schemas use completed for a successful job and keep ready/review on
+    # the catalog. If the job schema already uses catalog-style states, honor it.
+    if job.get("status") in {"ready", "needs_review"}:
+        job_outcome = outcome
+    _job_update(
+        client,
+        job,
+        {
+            "status": job_outcome,
+            "stage": outcome,
+            "progress": 100,
+            "processed_items": len(rows),
+            "total_items": len(rows),
+            "error_message": None,
+            "report": report,
+            "completed_at": _utc_now(),
+        },
+    )
+    return {
+        "ok": True,
+        "jobId": job["id"],
+        "catalogId": catalog["id"],
+        "status": outcome,
+        "parts": len(rows),
+        "accepted": accepted,
+        "pages": page_count,
+        "report": report,
+    }, 200
+
+
+def _request_job_id(body: Any) -> str:
+    if not isinstance(body, dict):
+        raise IndexingError(
+            400, "INVALID_REQUEST", "Il body deve essere un oggetto JSON."
+        )
+    value = body.get("jobId") or body.get("job_id")
+    if not isinstance(value, str) or not UUID_RE.fullmatch(value):
+        raise IndexingError(
+            400,
+            "INVALID_JOB_ID",
+            "jobId deve essere un UUID valido.",
+        )
+    return value
+
+
+class handler(BaseHTTPRequestHandler):
+    """Vercel Python function entry point."""
+
+    def _send_json(self, status: int, payload: dict[str, Any]) -> None:
+        encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode(
+            "utf-8"
+        )
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(encoded)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(encoded)
+
+    def do_POST(self) -> None:
+        client: SupabaseREST | None = None
+        job: dict[str, Any] | None = None
+        catalog: dict[str, Any] | None = None
+        claimed = False
+        started = time.monotonic()
+        try:
+            authorization = self.headers.get("Authorization", "")
+            if not authorization.lower().startswith("bearer "):
+                raise IndexingError(
+                    401,
+                    "AUTH_REQUIRED",
+                    "Bearer Supabase richiesto.",
+                )
+            user_token = authorization[7:].strip()
+            if not user_token:
+                raise IndexingError(401, "AUTH_REQUIRED", "Bearer Supabase richiesto.")
+
+            content_type = self.headers.get("Content-Type", "").split(";", 1)[0].lower()
+            if content_type != "application/json":
+                raise IndexingError(
+                    415,
+                    "INVALID_CONTENT_TYPE",
+                    "Content-Type application/json richiesto.",
+                )
+            try:
+                content_length = int(self.headers.get("Content-Length", "0"))
+            except ValueError as error:
+                raise IndexingError(
+                    400, "INVALID_REQUEST", "Content-Length non valido."
+                ) from error
+            if content_length <= 0 or content_length > 16 * 1024:
+                raise IndexingError(
+                    400,
+                    "INVALID_REQUEST",
+                    "Body JSON vuoto o troppo grande.",
+                )
+            try:
+                body = json.loads(self.rfile.read(content_length))
+            except (UnicodeDecodeError, json.JSONDecodeError) as error:
+                raise IndexingError(
+                    400, "INVALID_JSON", "Body JSON non valido."
+                ) from error
+            job_id = _request_job_id(body)
+
+            url, service_key = _required_environment()
+            client = SupabaseREST(url, service_key)
+            client.authenticate_admin(user_token)
+
+            jobs = client.select(
+                "ingestion_jobs", {"id": f"eq.{job_id}", "select": "*", "limit": "1"}
+            )
+            if not jobs:
+                raise IndexingError(
+                    404, "JOB_NOT_FOUND", "Job di indicizzazione non trovato."
+                )
+            job = jobs[0]
+            catalog_id = job.get("catalog_id")
+            if not isinstance(catalog_id, str):
+                raise IndexingError(
+                    422,
+                    "INVALID_JOB",
+                    "Il job non contiene un catalog_id valido.",
+                )
+            requested_catalog = body.get("catalogId") or body.get("catalog_id")
+            if requested_catalog is not None and requested_catalog != catalog_id:
+                raise IndexingError(
+                    409,
+                    "CATALOG_JOB_MISMATCH",
+                    "Il catalogo richiesto non appartiene al job.",
+                )
+            catalogs = client.select(
+                "catalogs",
+                {"id": f"eq.{catalog_id}", "select": "*", "limit": "1"},
+            )
+            if not catalogs:
+                raise IndexingError(
+                    404, "CATALOG_NOT_FOUND", "Catalogo non trovato."
+                )
+            catalog = catalogs[0]
+
+            status = str(job.get("status") or "")
+            if status not in {"queued", "failed"}:
+                raise IndexingError(
+                    409,
+                    "JOB_NOT_RUNNABLE",
+                    "Il job non è in uno stato avviabile.",
+                    {"status": status},
+                )
+            started_at = _utc_now()
+            locked = _job_update(
+                client,
+                job,
+                {
+                    "status": "running",
+                    "stage": "download",
+                    "progress": 1,
+                    "processed_items": 0,
+                    "error_message": None,
+                    "report": {
+                        "outcome": "running",
+                        "startedAt": started_at,
+                    },
+                    "started_at": started_at,
+                    "completed_at": None,
+                },
+                expected_status=status,
+                return_rows=True,
+            )
+            if not locked:
+                raise IndexingError(
+                    409,
+                    "JOB_ALREADY_CLAIMED",
+                    "Il job è già stato avviato da un altro processo.",
+                )
+            job.update(locked[0])
+            claimed = True
+            response, response_status = _run_indexing(client, job, catalog)
+            response["elapsedSeconds"] = round(time.monotonic() - started, 3)
+            self._send_json(response_status, response)
+        except IndexingError as error:
+            if claimed:
+                _failure_updates(client, job, catalog, error)
+            self._send_json(error.status, error.payload())
+        except Exception as error:
+            unexpected = IndexingError(
+                500,
+                "INDEXING_INTERNAL_ERROR",
+                "Errore interno durante l'indicizzazione.",
+                {"type": type(error).__name__},
+            )
+            if claimed:
+                _failure_updates(client, job, catalog, unexpected)
+            self._send_json(500, unexpected.payload())
+
+    def do_GET(self) -> None:
+        self.send_response(405)
+        self.send_header("Allow", "POST")
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        payload = b'{"error":"Metodo non consentito.","code":"METHOD_NOT_ALLOWED"}'
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+

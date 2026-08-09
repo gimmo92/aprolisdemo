@@ -1,7 +1,12 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { getAllParts } from './lib/retrieval.js'
+import { getAllSupabaseParts } from './lib/supabase-retrieval.js'
+import { isSupabaseConfigured } from './lib/supabase.js'
 
-export default function handler(request: VercelRequest, response: VercelResponse) {
+export default async function handler(
+  request: VercelRequest,
+  response: VercelResponse,
+) {
   response.setHeader('Cache-Control', 'public, max-age=60, s-maxage=600')
 
   if (request.method !== 'GET') {
@@ -11,7 +16,17 @@ export default function handler(request: VercelRequest, response: VercelResponse
 
   const serial =
     typeof request.query.serial === 'string' ? request.query.serial : '13510073'
-  const result = getAllParts(serial)
+  let result:
+    | (NonNullable<ReturnType<typeof getAllParts>> & { storagePath?: string })
+    | undefined
+  if (isSupabaseConfigured()) {
+    try {
+      result = await getAllSupabaseParts(serial)
+    } catch (error) {
+      console.error('Supabase parts retrieval failed; using bundled fallback', error)
+    }
+  }
+  result ||= getAllParts(serial)
   if (!result) {
     return response.status(404).json({
       error: 'Matricola non presente nei cataloghi indicizzati.',
@@ -36,11 +51,14 @@ export default function handler(request: VercelRequest, response: VercelResponse
   )
 
   return response.status(200).json({
-    catalog: result.catalog,
+    catalog: {
+      ...result.catalog,
+      pdfAvailable: Boolean(result.storagePath),
+    },
     parts,
     filters: {
       categories,
-      sourceTypes: ['mechanical', 'electrical'],
+      sourceTypes: [...new Set(parts.map((part) => part.sourceType))],
       pageMin: Math.min(...parts.map((part) => part.page)),
       pageMax: Math.max(...parts.map((part) => part.page)),
     },
