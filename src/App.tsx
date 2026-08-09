@@ -19,6 +19,13 @@ import {
 } from 'lucide-react'
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { catalog, exampleSearches, type Part } from './data/catalog'
+import {
+  ApiError,
+  askPartsAssistant,
+  identifyCatalog,
+  type CatalogInfo,
+  type ChatHistoryItem,
+} from './lib/api'
 
 type Phase = 'serial' | 'search'
 
@@ -36,46 +43,6 @@ const initialMessage: Message = {
   sender: 'assistant',
   eyebrow: 'Assistente ricambi',
   text: 'Buongiorno! Inserisci il numero di matricola del mezzo. Individuerò il catalogo corretto prima di cercare il ricambio.',
-}
-
-function normalize(value: string) {
-  return value
-    .toLocaleLowerCase('it')
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^a-z0-9]+/g, ' ')
-    .trim()
-}
-
-function scorePart(part: Part, query: string) {
-  const terms = normalize(query).split(' ').filter(Boolean)
-  if (!terms.length) return 0
-
-  const code = normalize(part.code)
-  const description = normalize(part.description)
-  const original = normalize(part.originalDescription)
-  const category = normalize(part.category)
-  const keywords = normalize(part.keywords.join(' '))
-  const searchable = `${code} ${description} ${original} ${category} ${keywords}`
-
-  return terms.reduce((score, term) => {
-    if (code === term) return score + 14
-    if (code.includes(term)) return score + 9
-    if (description.includes(term)) return score + 6
-    if (keywords.includes(term)) return score + 4
-    if (category.includes(term) || original.includes(term)) return score + 3
-    if (searchable.includes(term)) return score + 1
-    return score
-  }, 0)
-}
-
-function findParts(query: string) {
-  return catalog.parts
-    .map((part) => ({ part, score: scorePart(part, query) }))
-    .filter(({ score }) => score > 0)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 5)
-    .map(({ part }) => part)
 }
 
 function BrandMark() {
@@ -172,6 +139,7 @@ function ChatMessage({ message }: { message: Message }) {
 function App() {
   const [phase, setPhase] = useState<Phase>('serial')
   const [selectedSerial, setSelectedSerial] = useState<string>()
+  const [catalogInfo, setCatalogInfo] = useState<CatalogInfo>()
   const [input, setInput] = useState('')
   const [messages, setMessages] = useState<Message[]>([initialMessage])
   const [isThinking, setIsThinking] = useState(false)
@@ -197,55 +165,79 @@ function App() {
     ])
   }
 
-  const handleSerial = (value: string) => {
+  const handleSerial = async (value: string) => {
     const cleanSerial = value.replace(/\D/g, '')
     addMessage({ sender: 'user', text: value })
     setIsThinking(true)
 
-    window.setTimeout(() => {
-      setIsThinking(false)
-      if (!catalog.serialNumbers.includes(cleanSerial)) {
-        addMessage({
-          sender: 'assistant',
-          eyebrow: 'Matricola non trovata',
-          text: `Non trovo la matricola ${value} nei cataloghi indicizzati per questa demo. Prova con 13510073 o 13510074.`,
-        })
-        return
-      }
-
+    try {
+      const identifiedCatalog = await identifyCatalog(cleanSerial)
+      setCatalogInfo(identifiedCatalog)
       setSelectedSerial(cleanSerial)
       setPhase('search')
       addMessage({
         sender: 'assistant',
         eyebrow: 'Catalogo individuato',
-        text: `Perfetto. Ho associato la matricola ${cleanSerial} al ${catalog.version} (${catalog.orderReference}). Quale ricambio stai cercando?`,
+        text: `Perfetto. Ho associato la matricola ${cleanSerial} al ${identifiedCatalog.version} (${identifiedCatalog.orderReference}). Quale ricambio stai cercando?`,
       })
-    }, 550)
+    } catch (error) {
+      const message =
+        error instanceof ApiError && error.status === 404
+          ? `Non trovo la matricola ${value} nei cataloghi indicizzati. Prova con 13510073 o 13510074.`
+          : error instanceof Error
+            ? error.message
+            : 'Non riesco a verificare la matricola in questo momento.'
+      addMessage({
+        sender: 'assistant',
+        eyebrow: 'Matricola non verificata',
+        text: message,
+      })
+    } finally {
+      setIsThinking(false)
+    }
   }
 
-  const handleSearch = (value: string) => {
+  const handleSearch = async (value: string) => {
+    if (!selectedSerial) return
+    const history: ChatHistoryItem[] = messages
+      .slice(-6)
+      .map((message) => ({
+        role: message.sender === 'user' ? 'user' : 'assistant',
+        content: message.text,
+      }))
     addMessage({ sender: 'user', text: value })
     setIsThinking(true)
 
-    window.setTimeout(() => {
-      const results = findParts(value)
-      setIsThinking(false)
-      if (results.length) {
+    try {
+      const result = await askPartsAssistant(selectedSerial, value, history)
+      if (result.parts.length) {
         addMessage({
           sender: 'assistant',
-          eyebrow: 'Risultati dal catalogo',
-          text: `Ho trovato ${results.length === 1 ? 'un ricambio' : `${results.length} ricambi`} pertinente${results.length === 1 ? '' : 'i'} nella documentazione della matricola ${selectedSerial}.`,
-          results,
+          eyebrow: 'Risposta Claude · fonti verificate',
+          text: result.answer,
+          results: result.parts,
         })
       } else {
         addMessage({
           sender: 'assistant',
           eyebrow: 'Nessuna corrispondenza',
-          text: `Non ho trovato “${value}” nell’indice ricambi disponibile. Puoi descriverlo in modo diverso o cercare per codice.`,
+          text: result.answer,
           noResults: true,
         })
       }
-    }, 650)
+    } catch (error) {
+      addMessage({
+        sender: 'assistant',
+        eyebrow: 'Ricerca non disponibile',
+        text:
+          error instanceof Error
+            ? error.message
+            : 'Si è verificato un errore durante la ricerca.',
+        noResults: true,
+      })
+    } finally {
+      setIsThinking(false)
+    }
   }
 
   const submit = (event: FormEvent) => {
@@ -253,13 +245,14 @@ function App() {
     const value = input.trim()
     if (!value || isThinking) return
     setInput('')
-    if (phase === 'serial') handleSerial(value)
-    else handleSearch(value)
+    if (phase === 'serial') void handleSerial(value)
+    else void handleSearch(value)
   }
 
   const reset = () => {
     setPhase('serial')
     setSelectedSerial(undefined)
+    setCatalogInfo(undefined)
     setInput('')
     setIsThinking(false)
     messageId.current = 2
@@ -268,8 +261,8 @@ function App() {
 
   const handleSuggestion = (value: string) => {
     if (isThinking) return
-    if (phase === 'serial') handleSerial(value)
-    else handleSearch(value)
+    if (phase === 'serial') void handleSerial(value)
+    else void handleSearch(value)
   }
 
   return (
@@ -326,15 +319,15 @@ function App() {
                 <div className="machine-icon"><Wrench size={19} /></div>
                 <div>
                   <span>Mezzo identificato</span>
-                  <strong>{catalog.model}</strong>
+                  <strong>{catalogInfo?.model ?? catalog.model}</strong>
                 </div>
                 <ShieldCheck size={20} />
               </div>
               <dl>
-                <div><dt>Marca</dt><dd>Charlatte</dd></div>
+                <div><dt>Marca</dt><dd>{catalogInfo?.brand ?? 'Charlatte'}</dd></div>
                 <div><dt>Matricola</dt><dd>{selectedSerial}</dd></div>
                 <div><dt>Versione</dt><dd>PH1 80V</dd></div>
-                <div><dt>Catalogo</dt><dd>{catalog.documentPages} pagine</dd></div>
+                <div><dt>Catalogo</dt><dd>{catalogInfo?.documentPages ?? catalog.documentPages} pagine</dd></div>
               </dl>
             </div>
           ) : (
@@ -369,7 +362,7 @@ function App() {
             </div>
             <div className="catalog-count">
               <PackageSearch size={19} />
-              <span><strong>{catalog.parts.length}</strong> ricambi indicizzati</span>
+              <span><strong>{catalogInfo?.partCount ?? '585'}</strong> ricambi indicizzati</span>
             </div>
           </div>
 

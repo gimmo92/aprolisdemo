@@ -3,6 +3,9 @@ dist/
 .vite/
 *.local
 *.log
+.env
+.env.*
+!.env.example
 
 # I cataloghi originali restano locali: possono essere pesanti o riservati.
 Cataloghi ricambi/
