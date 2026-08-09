@@ -701,26 +701,12 @@ def _validate_pdf(
     return checksum, document
 
 
-def _mini_pdf(document: fitz.Document, page_index: int) -> bytes:
-    chunk = fitz.open()
-    try:
-        chunk.insert_pdf(document, from_page=page_index, to_page=page_index)
-        return chunk.tobytes(garbage=4, deflate=True)
-    finally:
-        chunk.close()
-
-
-def _metadata_pdf(document: fitz.Document) -> bytes:
-    chunk = fitz.open()
-    try:
-        chunk.insert_pdf(
-            document,
-            from_page=0,
-            to_page=min(document.page_count, 4) - 1,
-        )
-        return chunk.tobytes(garbage=4, deflate=True)
-    finally:
-        chunk.close()
+def _page_image(document: fitz.Document, page_index: int) -> bytes:
+    page = document[page_index]
+    # 144 DPI keeps small table text legible while remaining below Anthropic's
+    # image limits for typical A4/A3 catalog pages.
+    pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+    return pixmap.tobytes("png")
 
 
 def _anthropic_catalog_metadata(
@@ -743,6 +729,19 @@ def _anthropic_catalog_metadata(
         },
         "confidence": {"type": "number", "minimum": 0, "maximum": 1},
     }
+    page_images = [
+        {
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": "image/png",
+                "data": base64.b64encode(_page_image(document, page_index)).decode(
+                    "ascii"
+                ),
+            },
+        }
+        for page_index in range(min(document.page_count, 4))
+    ]
     payload = {
         "model": model,
         "max_tokens": 1200,
@@ -755,16 +754,7 @@ def _anthropic_catalog_metadata(
             {
                 "role": "user",
                 "content": [
-                    {
-                        "type": "document",
-                        "source": {
-                            "type": "base64",
-                            "media_type": "application/pdf",
-                            "data": base64.b64encode(_metadata_pdf(document)).decode(
-                                "ascii"
-                            ),
-                        },
-                    },
+                    *page_images,
                     {
                         "type": "text",
                         "text": (
@@ -895,7 +885,7 @@ def _ai_schema() -> dict[str, Any]:
 
 
 def _anthropic_parts(
-    mini_pdf: bytes,
+    page_image: bytes,
     page_number: int,
     brand: str,
     api_key: str,
@@ -920,11 +910,11 @@ def _anthropic_parts(
                 "role": "user",
                 "content": [
                     {
-                        "type": "document",
+                        "type": "image",
                         "source": {
                             "type": "base64",
-                            "media_type": "application/pdf",
-                            "data": base64.b64encode(mini_pdf).decode("ascii"),
+                            "media_type": "image/png",
+                            "data": base64.b64encode(page_image).decode("ascii"),
                         },
                     },
                     {"type": "text", "text": prompt},
@@ -1336,7 +1326,7 @@ def _extract(
     for position, page_index in enumerate(selected_ai_indexes):
         try:
             extracted = _anthropic_parts(
-                _mini_pdf(document, page_index),
+                _page_image(document, page_index),
                 page_index + 1,
                 brand,
                 api_key,
@@ -1353,6 +1343,7 @@ def _extract(
                     "page": page_index + 1,
                     "code": error.code,
                     "message": error.message,
+                    "details": error.details,
                 }
             )
         progress = 60 + int(((position + 1) / max(len(selected_ai_indexes), 1)) * 15)
