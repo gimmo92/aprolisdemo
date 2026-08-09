@@ -745,7 +745,6 @@ def _anthropic_catalog_metadata(
     payload = {
         "model": model,
         "max_tokens": 1200,
-        "temperature": 0,
         "system": (
             "You transcribe catalog identification metadata. Never invent a value. "
             "Use an empty string or empty array when a field is not visible."
@@ -900,7 +899,6 @@ def _anthropic_parts(
     payload = {
         "model": model,
         "max_tokens": 4096,
-        "temperature": 0,
         "system": (
             "You are a strict spare-parts table transcriber. Your response must "
             "conform exactly to the supplied JSON schema."
