@@ -372,6 +372,234 @@ def _catalog_filename(catalog: dict[str, Any]) -> str:
     )
 
 
+def _clean_metadata_value(value: str, maximum: int = 160) -> str:
+    return " ".join(value.replace("\x00", " ").replace("\u00a0", " ").split())[
+        :maximum
+    ].strip(" \t,;:-")
+
+
+def _metadata_text(document: fitz.Document) -> str:
+    texts: list[str] = []
+    # Identification data is normally on the cover or document-control pages.
+    for page_index in range(min(document.page_count, 12)):
+        text = document[page_index].get_text("text", sort=True)
+        if text:
+            texts.append(text[:40_000])
+    return "\n".join(texts)[:250_000]
+
+
+def _label_value(text: str, labels: str, maximum: int = 160) -> str:
+    match = re.search(
+        rf"(?:{labels})\s*(?:[:#]|n[°º.]?)?\s*([^\n\r]{{2,{maximum}}})",
+        text,
+        re.I,
+    )
+    return _clean_metadata_value(match.group(1), maximum) if match else ""
+
+
+def _detect_serials(filename: str, text: str) -> list[str]:
+    candidates: list[str] = []
+    serial_labels = (
+        r"matricol[ae]|serial(?:\s+(?:number|no|nr|n[°º.]))?|"
+        r"s\s*[/.-]?\s*n[°º.]?|n[°º.]?\s*(?:di\s+)?serie"
+    )
+    for match in re.finditer(
+        rf"(?:{serial_labels})\s*[:#-]?\s*([^\n\r]{{3,120}})",
+        text,
+        re.I,
+    ):
+        value = match.group(1)
+        candidates.extend(
+            re.findall(r"(?<![A-Z0-9])([A-Z0-9][A-Z0-9._/-]{4,30})(?![A-Z0-9])", value, re.I)
+        )
+
+    # Long numeric identifiers in filenames are reliable and cover names such
+    # as T13510073-13510074 without requiring catalog-specific configuration.
+    candidates.extend(re.findall(r"(?<!\d)(\d{7,14})(?!\d)", filename))
+
+    serials: list[str] = []
+    for candidate in candidates:
+        for value in re.split(r"[,;/]|\s+-\s+|-(?=\d{6,})", candidate):
+            normalized = re.sub(r"[^A-Za-z0-9._/-]", "", value).strip("./_-")
+            if (
+                5 <= len(normalized) <= 30
+                and any(char.isdigit() for char in normalized)
+                and normalized.upper() not in {"NUMBER", "SERIAL"}
+            ):
+                serials.append(normalized.upper())
+    return list(dict.fromkeys(serials))[:500]
+
+
+def _detect_catalog_metadata(
+    document: fitz.Document, catalog: dict[str, Any]
+) -> dict[str, Any]:
+    filename = _catalog_filename(catalog)
+    filename_text = re.sub(r"[_-]+", " ", re.sub(r"\.pdf$", "", filename, flags=re.I))
+    document_text = _metadata_text(document)
+    combined = f"{filename_text}\n{document_text}"
+
+    brand = ""
+    for canonical, pattern in (
+        ("Charlatte", r"\bcharlatte\b"),
+        ("Hangcha", r"\bhangcha\b"),
+        ("Movexx", r"\bmovexx\b"),
+        ("Fiorentini", r"\bfiorentini\b"),
+    ):
+        if re.search(pattern, combined, re.I):
+            brand = canonical
+            break
+
+    labelled_model = _label_value(
+        document_text,
+        r"model(?:lo|e)?|type|tipo|vehicle\s+type|machine\s+type",
+        100,
+    )
+    model_match = re.search(
+        r"\b(?:T\d{2,4}|CPD[A-Z0-9-]*\d[A-Z0-9-]*|"
+        r"CPCD[A-Z0-9-]*\d[A-Z0-9-]*|CBD[A-Z0-9-]*\d[A-Z0-9-]*|"
+        r"XC[A-Z0-9-]*\d[A-Z0-9-]*|FIO[A-Z0-9-]*\d[A-Z0-9-]*)\b",
+        combined,
+        re.I,
+    )
+    labelled_model_match = (
+        re.search(
+            r"\b[A-Z][A-Z0-9._/-]{1,30}\d[A-Z0-9._/-]*\b",
+            labelled_model,
+            re.I,
+        )
+        if labelled_model
+        else None
+    )
+    model = _clean_metadata_value(
+        (
+            labelled_model_match.group(0)
+            if labelled_model_match
+            else (model_match.group(0) if model_match else labelled_model)
+        ),
+        100,
+    ).upper()
+
+    version = ""
+    if model:
+        for line in document_text.splitlines():
+            clean = _clean_metadata_value(line, 100)
+            if (
+                model.casefold() in clean.casefold()
+                and 3 <= len(clean) <= 100
+                and re.search(r"\b(?:PH\d+|\d{2,3}\s*V|REV\w*)\b", clean, re.I)
+            ):
+                version = clean
+                break
+    version = version or model
+
+    revision_match = re.search(
+        r"\b(?:rev(?:ision|isione)?\.?)\s*[:#-]?\s*([A-Z0-9._/-]{1,30})",
+        combined,
+        re.I,
+    )
+    revision = revision_match.group(1).upper() if revision_match else ""
+
+    order_match = re.search(
+        r"\b(?:AR|order|ordine|commande)\s*[:#-]?\s*([A-Z0-9][A-Z0-9._/-]{3,40})",
+        combined,
+        re.I,
+    )
+    order_reference = (
+        f"AR {order_match.group(1)}"
+        if order_match and order_match.group(0).upper().startswith("AR")
+        else (order_match.group(1) if order_match else "")
+    )
+    if order_reference.upper().startswith("AR AR"):
+        order_reference = order_reference[3:]
+
+    customer = _label_value(
+        document_text,
+        r"customer|client(?:e)?|cliente|utilisateur|destinataire",
+        160,
+    )
+    if not customer and re.search(r"\bmovincar\b", combined, re.I):
+        customer = "Movincar / Avio Global Services"
+
+    serial_numbers = _detect_serials(filename, document_text)
+    detected = {
+        "brand": brand,
+        "model": model,
+        "version": version,
+        "customer": customer,
+        "orderReference": _clean_metadata_value(order_reference, 100),
+        "revision": _clean_metadata_value(revision, 50),
+        "serialNumbers": serial_numbers,
+    }
+    missing = [
+        key
+        for key in ("brand", "model", "serialNumbers")
+        if not detected.get(key)
+    ]
+    detected["missing"] = missing
+    detected["confidence"] = round(
+        sum(
+            bool(detected.get(key))
+            for key in (
+                "brand",
+                "model",
+                "version",
+                "customer",
+                "orderReference",
+                "revision",
+                "serialNumbers",
+            )
+        )
+        / 7,
+        3,
+    )
+    detected["source"] = "deterministic"
+    return detected
+
+
+def _apply_detected_metadata(
+    client: SupabaseREST,
+    catalog: dict[str, Any],
+    detected: dict[str, Any],
+) -> None:
+    current_metadata = catalog.get("metadata")
+    if not isinstance(current_metadata, dict):
+        current_metadata = {}
+    values = {
+        "brand": detected.get("brand") or catalog.get("brand") or "Non rilevato",
+        "model": detected.get("model") or catalog.get("model") or "Non rilevato",
+        "version": detected.get("version") or None,
+        "customer": detected.get("customer") or None,
+        "order_reference": detected.get("orderReference") or None,
+        "revision": detected.get("revision") or None,
+        "metadata": {
+            **current_metadata,
+            "metadataStatus": (
+                "needs_review" if detected.get("missing") else "detected"
+            ),
+            "detected": detected,
+        },
+    }
+    _catalog_update(client, catalog, values)
+    catalog.update(values)
+
+    client.delete("catalog_serials", {"catalog_id": f"eq.{catalog['id']}"})
+    rows = [
+        {
+            "id": str(
+                uuid.uuid5(
+                    uuid.NAMESPACE_URL,
+                    f"{catalog['id']}|serial|{serial.casefold()}",
+                )
+            ),
+            "catalog_id": catalog["id"],
+            "serial_number": serial,
+            "metadata": {"extraction": "automatic"},
+        }
+        for serial in detected.get("serialNumbers", [])
+    ]
+    client.upsert("catalog_serials", rows)
+
+
 def _validate_pdf(
     content: bytes, downloaded_mime: str, catalog: dict[str, Any]
 ) -> tuple[str, fitz.Document]:
@@ -458,6 +686,144 @@ def _mini_pdf(document: fitz.Document, page_index: int) -> bytes:
         return chunk.tobytes(garbage=4, deflate=True)
     finally:
         chunk.close()
+
+
+def _metadata_pdf(document: fitz.Document) -> bytes:
+    chunk = fitz.open()
+    try:
+        chunk.insert_pdf(
+            document,
+            from_page=0,
+            to_page=min(document.page_count, 4) - 1,
+        )
+        return chunk.tobytes(garbage=4, deflate=True)
+    finally:
+        chunk.close()
+
+
+def _anthropic_catalog_metadata(
+    document: fitz.Document,
+    filename: str,
+    api_key: str,
+    model: str,
+) -> dict[str, Any]:
+    fields = {
+        "brand": {"type": "string", "maxLength": 100},
+        "model": {"type": "string", "maxLength": 100},
+        "version": {"type": "string", "maxLength": 100},
+        "customer": {"type": "string", "maxLength": 160},
+        "orderReference": {"type": "string", "maxLength": 100},
+        "revision": {"type": "string", "maxLength": 50},
+        "serialNumbers": {
+            "type": "array",
+            "maxItems": 500,
+            "items": {"type": "string", "minLength": 3, "maxLength": 50},
+        },
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+    }
+    payload = {
+        "model": model,
+        "max_tokens": 1200,
+        "temperature": 0,
+        "system": (
+            "You transcribe catalog identification metadata. Never invent a value. "
+            "Use an empty string or empty array when a field is not visible."
+        ),
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "document",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "application/pdf",
+                            "data": base64.b64encode(_metadata_pdf(document)).decode(
+                                "ascii"
+                            ),
+                        },
+                    },
+                    {
+                        "type": "text",
+                        "text": (
+                            "Extract brand/manufacturer, machine model, full version, "
+                            "customer, order or AR reference, document revision and every "
+                            f"machine serial number. Filename hint: {filename}"
+                        ),
+                    },
+                ],
+            }
+        ],
+        "output_config": {
+            "format": {
+                "type": "json_schema",
+                "schema": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": fields,
+                    "required": list(fields),
+                },
+            }
+        },
+    }
+    request = Request(
+        "https://api.anthropic.com/v1/messages",
+        data=json.dumps(payload, separators=(",", ":")).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+        },
+        method="POST",
+    )
+    try:
+        with urlopen(
+            request,
+            timeout=_env_int("INDEX_AI_TIMEOUT_SECONDS", 45, 10, 120),
+        ) as response:
+            message = _decode_json(response.read(), "Anthropic metadata")
+    except HTTPError as error:
+        error.read()
+        raise IndexingError(
+            502 if error.code >= 500 else error.code,
+            "ANTHROPIC_METADATA_FAILED",
+            "Riconoscimento metadati Anthropic non riuscito.",
+            {"status": error.code},
+        ) from error
+    except (URLError, TimeoutError) as error:
+        raise IndexingError(
+            502,
+            "ANTHROPIC_METADATA_UNAVAILABLE",
+            "Anthropic non è raggiungibile per il riconoscimento metadati.",
+        ) from error
+
+    blocks = message.get("content") if isinstance(message, dict) else None
+    text = next(
+        (
+            block.get("text")
+            for block in blocks or []
+            if isinstance(block, dict)
+            and block.get("type") == "text"
+            and isinstance(block.get("text"), str)
+        ),
+        None,
+    )
+    try:
+        detected = json.loads(text) if text else None
+    except json.JSONDecodeError as error:
+        raise IndexingError(
+            502,
+            "ANTHROPIC_METADATA_INVALID",
+            "Anthropic ha restituito metadati non validi.",
+        ) from error
+    if not isinstance(detected, dict) or set(detected) != set(fields):
+        raise IndexingError(
+            502,
+            "ANTHROPIC_METADATA_INVALID",
+            "La risposta metadati Anthropic non rispetta lo schema.",
+        )
+    return detected
 
 
 def _ai_schema() -> dict[str, Any]:
@@ -1052,11 +1418,98 @@ def _run_indexing(
     content, downloaded_mime = client.download_private_object(bucket, storage_path)
     checksum, document = _validate_pdf(content, downloaded_mime, catalog)
     try:
+        detected_metadata = _detect_catalog_metadata(document, catalog)
+        if detected_metadata.get("missing"):
+            api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+            model = (
+                os.environ.get("ANTHROPIC_INDEX_MODEL")
+                or os.environ.get("ANTHROPIC_MODEL")
+                or ""
+            ).strip()
+            if api_key and model:
+                try:
+                    ai_metadata = _anthropic_catalog_metadata(
+                        document,
+                        _catalog_filename(catalog),
+                        api_key,
+                        model,
+                    )
+                    for field in (
+                        "brand",
+                        "model",
+                        "version",
+                        "customer",
+                        "orderReference",
+                        "revision",
+                    ):
+                        if not detected_metadata.get(field) and ai_metadata.get(field):
+                            detected_metadata[field] = _clean_metadata_value(
+                                str(ai_metadata[field]),
+                                160 if field == "customer" else 100,
+                            )
+                    if not detected_metadata.get("serialNumbers"):
+                        detected_metadata["serialNumbers"] = list(
+                            dict.fromkeys(
+                                re.sub(r"[^A-Za-z0-9._/-]", "", str(value)).upper()
+                                for value in ai_metadata.get("serialNumbers", [])
+                                if 3 <= len(str(value)) <= 50
+                            )
+                        )[:500]
+                    detected_metadata["aiConfidence"] = ai_metadata.get("confidence")
+                    detected_metadata["source"] = "deterministic+anthropic"
+                except IndexingError as error:
+                    detected_metadata["aiError"] = {
+                        "code": error.code,
+                        "message": error.message,
+                    }
+            else:
+                detected_metadata["source"] = "deterministic"
+                detected_metadata["aiError"] = {
+                    "code": "ANTHROPIC_NOT_CONFIGURED",
+                    "message": "Fallback metadati AI non configurato.",
+                }
+            detected_metadata["missing"] = [
+                key
+                for key in ("brand", "model", "serialNumbers")
+                if not detected_metadata.get(key)
+            ]
+            detected_metadata["confidence"] = round(
+                sum(
+                    bool(detected_metadata.get(key))
+                    for key in (
+                        "brand",
+                        "model",
+                        "version",
+                        "customer",
+                        "orderReference",
+                        "revision",
+                        "serialNumbers",
+                    )
+                )
+                / 7,
+                3,
+            )
+        _apply_detected_metadata(client, catalog, detected_metadata)
+        job["progress"] = 8
+        _job_update(
+            client,
+            job,
+            {
+                "stage": "metadata_detection",
+                "progress": 8,
+                "processed_items": 0,
+                "total_items": document.page_count,
+            },
+        )
         parts, report, outcome = _extract(client, job, catalog, document, checksum)
         page_count = document.page_count
     finally:
         document.close()
 
+    if detected_metadata.get("missing"):
+        outcome = "needs_review"
+        report["outcome"] = outcome
+    report["detectedMetadata"] = detected_metadata
     schema = _parts_schema(catalog)
     rows = [_part_row(str(catalog["id"]), part, schema) for part in parts]
 
@@ -1116,6 +1569,7 @@ def _run_indexing(
         "parts": len(rows),
         "accepted": accepted,
         "pages": page_count,
+        "metadata": detected_metadata,
         "report": report,
     }, 200
 

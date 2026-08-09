@@ -1818,6 +1818,33 @@ button {
   border-radius: 10px;
 }
 
+.auto-detect-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 18px;
+  padding: 13px 14px;
+  color: #1e40af;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 10px;
+}
+
+.auto-detect-note > svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.auto-detect-note div {
+  display: grid;
+  gap: 2px;
+}
+
+.auto-detect-note span {
+  color: #475569;
+  font-size: 12px;
+}
+
 .upload-progress span {
   display: block;
   height: 100%;

@@ -22,8 +22,11 @@ riservati. Lo script `scripts/index_catalogs.py` genera l'indice distribuibile
 
 1. Supabase Auth e RLS proteggono la tab **Gestione cataloghi**.
 2. I PDF restano nel bucket privato `catalogs`; il browser usa upload TUS da 6 MB.
+   L'amministratore seleziona solo il file: brand, modello, versione, revisione,
+   cliente, ordine e matricole vengono riconosciuti dal documento.
 3. `POST /api/index_catalog` valida e indicizza Charlatte, Hangcha, Movexx e
-   Fiorentini con parser deterministici e fallback Claude sulle pagine dubbie.
+   Fiorentini con parser deterministici e fallback Claude per metadati o pagine
+   dubbie.
 4. `GET /api/catalog`, `GET /api/parts` e il tool di `POST /api/chat` leggono
    Postgres, filtrati per matricola. L'indice JSON resta un fallback temporaneo.
 5. `GET /api/pdf` crea un URL firmato di cinque minuti e apre la pagina citata.

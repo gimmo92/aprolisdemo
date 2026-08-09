@@ -33,16 +33,6 @@ type AdminCatalog = {
   }>
 }
 
-const initialForm = {
-  brand: '',
-  model: '',
-  version: '',
-  customer: '',
-  orderReference: '',
-  revision: '1',
-  serialNumbers: '',
-}
-
 function statusLabel(status: string) {
   const labels: Record<string, string> = {
     uploaded: 'Caricato',
@@ -64,7 +54,6 @@ export function AdminCatalogs() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [authMode, setAuthMode] = useState<'login' | 'signup'>('login')
-  const [form, setForm] = useState(initialForm)
   const [file, setFile] = useState<File>()
   const [progress, setProgress] = useState(0)
   const [busy, setBusy] = useState(false)
@@ -181,15 +170,6 @@ export function AdminCatalogs() {
       setMessage('Il PDF supera il limite di 250 MB.')
       return
     }
-    const serialNumbers = form.serialNumbers
-      .split(/[\s,;]+/)
-      .map((item) => item.trim())
-      .filter(Boolean)
-    if (!serialNumbers.length) {
-      setMessage('Inserisci almeno una matricola.')
-      return
-    }
-
     setBusy(true)
     setMessage('Caricamento PDF in corso…')
     setProgress(0)
@@ -202,8 +182,6 @@ export function AdminCatalogs() {
         method: 'POST',
         headers: authHeaders,
         body: JSON.stringify({
-          ...form,
-          serialNumbers,
           storagePath,
           originalFilename: file.name,
           fileSize: file.size,
@@ -229,7 +207,6 @@ export function AdminCatalogs() {
           : `Catalogo pronto: ${indexed.accepted || 0} ricambi indicizzati.`,
       )
       setFile(undefined)
-      setForm(initialForm)
       setProgress(0)
       await refresh()
     } catch (error) {
@@ -308,21 +285,19 @@ export function AdminCatalogs() {
         </button>
       </header>
       <form className="upload-card" onSubmit={submitCatalog}>
-        <div className="upload-title"><FileUp /><div><h3>Nuovo catalogo PDF</h3><p>Upload riprendibile e indicizzazione automatica.</p></div></div>
+        <div className="upload-title"><FileUp /><div><h3>Nuovo catalogo PDF</h3><p>Carica il documento: tutti i dati vengono riconosciuti automaticamente.</p></div></div>
         <label className="file-drop">
           <input name="catalogPdf" type="file" accept="application/pdf,.pdf" onChange={(e) => setFile(e.target.files?.[0])} required />
           <FileUp />
           <strong>{file?.name || 'Seleziona o trascina un PDF'}</strong>
           <span>Massimo 250 MB</span>
         </label>
-        <div className="metadata-grid">
-          <label>Brand<input name="brand" value={form.brand} onChange={(e) => setForm({ ...form, brand: e.target.value })} required /></label>
-          <label>Modello<input name="model" value={form.model} onChange={(e) => setForm({ ...form, model: e.target.value })} required /></label>
-          <label>Versione<input name="version" value={form.version} onChange={(e) => setForm({ ...form, version: e.target.value })} /></label>
-          <label>Revisione<input name="revision" value={form.revision} onChange={(e) => setForm({ ...form, revision: e.target.value })} /></label>
-          <label>Cliente<input name="customer" value={form.customer} onChange={(e) => setForm({ ...form, customer: e.target.value })} /></label>
-          <label>Ordine / AR<input name="orderReference" value={form.orderReference} onChange={(e) => setForm({ ...form, orderReference: e.target.value })} /></label>
-          <label className="wide">Matricole<textarea name="serialNumbers" value={form.serialNumbers} onChange={(e) => setForm({ ...form, serialNumbers: e.target.value })} placeholder="13510073, 13510074" required /></label>
+        <div className="auto-detect-note">
+          <CheckCircle2 size={18} />
+          <div>
+            <strong>Riconoscimento automatico</strong>
+            <span>Brand, modello, versione, revisione, cliente, ordine e matricole saranno estratti dal PDF.</span>
+          </div>
         </div>
         {busy && progress > 0 && <div className="upload-progress"><span style={{ width: `${progress}%` }} /></div>}
         <button className="primary-button" disabled={busy || !file}>
@@ -335,7 +310,9 @@ export function AdminCatalogs() {
         <div className="list-heading"><h3>Cataloghi</h3><button onClick={() => void refresh()}><RefreshCw size={16} /> Aggiorna</button></div>
         {catalogs.map((catalog) => {
           const job = catalog.ingestion_jobs?.at(0)
-          const state = job?.status || catalog.status
+          const state = ['ready', 'needs_review', 'failed'].includes(catalog.status)
+            ? catalog.status
+            : job?.status || catalog.status
           return (
             <article key={catalog.id} className="admin-catalog-row">
               <div className={`status-dot ${state}`} />

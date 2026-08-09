@@ -6,14 +6,24 @@ const catalogSchema = z.object({
   storagePath: z.string().min(3).max(500),
   originalFilename: z.string().min(3).max(255),
   fileSize: z.number().int().positive().max(250 * 1024 * 1024),
-  brand: z.string().trim().min(1).max(100),
-  model: z.string().trim().min(1).max(100),
-  version: z.string().trim().max(100).optional().default(''),
-  customer: z.string().trim().max(160).optional().default(''),
-  orderReference: z.string().trim().max(100).optional().default(''),
-  revision: z.string().trim().max(50).optional().default(''),
-  serialNumbers: z.array(z.string().regex(/^[A-Za-z0-9._/-]{3,50}$/)).min(1).max(500),
 })
+
+function filenameHints(filename: string) {
+  const readable = filename
+    .replace(/\.pdf$/i, '')
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  const brand =
+    ['Charlatte', 'Hangcha', 'Movexx', 'Fiorentini'].find((value) =>
+      readable.toLocaleLowerCase('it').includes(value.toLocaleLowerCase('it')),
+    ) || 'Rilevamento automatico'
+  const model =
+    readable.match(
+      /\b(?:T\d{2,4}|CPD[A-Z0-9-]*\d[A-Z0-9-]*|CPCD[A-Z0-9-]*\d[A-Z0-9-]*|CBD[A-Z0-9-]*\d[A-Z0-9-]*)\b/i,
+    )?.[0] || readable.slice(0, 100)
+  return { brand, model: model || 'Rilevamento automatico' }
+}
 
 export default async function handler(
   request: VercelRequest,
@@ -39,26 +49,28 @@ export default async function handler(
     const parsed = catalogSchema.safeParse(request.body)
     if (!parsed.success) {
       return response.status(400).json({
-        error: 'Metadati catalogo non validi.',
+        error: 'File catalogo non valido.',
         details: parsed.error.issues.map((issue) => issue.message),
       })
     }
     const input = parsed.data
+    const hints = filenameHints(input.originalFilename)
     const { data: catalog, error } = await supabase
       .from('catalogs')
       .insert({
-        brand: input.brand,
-        model: input.model,
-        version: input.version || null,
-        customer: input.customer || null,
-        order_reference: input.orderReference || null,
-        revision: input.revision || null,
+        brand: hints.brand,
+        model: hints.model,
+        version: null,
+        customer: null,
+        order_reference: null,
+        revision: null,
         original_filename: input.originalFilename,
         storage_path: input.storagePath,
         file_size: input.fileSize,
         mime_type: 'application/pdf',
         status: 'uploaded',
         created_by: admin.user.id,
+        metadata: { metadataStatus: 'pending' },
       })
       .select('id')
       .single()
@@ -66,19 +78,6 @@ export default async function handler(
     if (error || !catalog) {
       await supabase.storage.from('catalogs').remove([input.storagePath])
       return response.status(500).json({ error: error?.message || 'Catalogo non creato.' })
-    }
-
-    const serialRows = [...new Set(input.serialNumbers)].map((serial) => ({
-      catalog_id: catalog.id,
-      serial_number: serial,
-    }))
-    const { error: serialError } = await supabase
-      .from('catalog_serials')
-      .insert(serialRows)
-    if (serialError) {
-      await supabase.from('catalogs').delete().eq('id', catalog.id)
-      await supabase.storage.from('catalogs').remove([input.storagePath])
-      return response.status(500).json({ error: serialError.message })
     }
 
     const { data: job, error: jobError } = await supabase
