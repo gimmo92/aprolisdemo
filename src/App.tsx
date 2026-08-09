@@ -16,12 +16,14 @@ import {
   Send,
   ShieldCheck,
   Sparkles,
+  UploadCloud,
   UserRound,
   Wrench,
 } from 'lucide-react'
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { catalog, exampleSearches, type Part } from './data/catalog'
 import PartsCatalog from './components/PartsCatalog'
+import { AdminCatalogs } from './components/AdminCatalogs'
 import {
   ApiError,
   askPartsAssistant,
@@ -31,7 +33,7 @@ import {
 } from './lib/api'
 
 type Phase = 'serial' | 'search'
-type ActiveView = 'chat' | 'catalog'
+type ActiveView = 'chat' | 'catalog' | 'admin'
 
 type Message = {
   id: number
@@ -360,13 +362,13 @@ function App() {
           </div>
         </aside>
 
-        <section className={`chat-panel ${activeView === 'catalog' ? 'catalog-view' : ''}`}>
+        <section className={`chat-panel ${activeView !== 'chat' ? 'catalog-view' : ''}`}>
           <div className="chat-header">
             <div>
               <span className="chat-online">
-                <span /> {activeView === 'chat' ? 'Assistente online' : 'Indice aggiornato'}
+                <span /> {activeView === 'chat' ? 'Assistente online' : activeView === 'catalog' ? 'Indice aggiornato' : 'Area protetta'}
               </span>
-              <h2>{activeView === 'chat' ? 'Ricerca ricambi' : 'Catalogo ricambi'}</h2>
+              <h2>{activeView === 'chat' ? 'Ricerca ricambi' : activeView === 'catalog' ? 'Catalogo ricambi' : 'Amministrazione'}</h2>
             </div>
             <div className="view-tabs" role="tablist" aria-label="Sezione applicazione">
               <button
@@ -389,8 +391,18 @@ function App() {
                 <LibraryBig size={16} />
                 Tutti i ricambi
               </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeView === 'admin'}
+                className={activeView === 'admin' ? 'active' : ''}
+                onClick={() => setActiveView('admin')}
+              >
+                <UploadCloud size={16} />
+                Gestione cataloghi
+              </button>
             </div>
-            <div className="catalog-count">
+            <div className={`catalog-count ${activeView === 'admin' ? 'hidden' : ''}`}>
               <PackageSearch size={19} />
               <span><strong>{catalogInfo?.partCount ?? '585'}</strong> ricambi indicizzati</span>
             </div>
@@ -446,9 +458,13 @@ function App() {
                 </p>
               </div>
             </>
-          ) : (
+          ) : activeView === 'catalog' ? (
             <div className="catalog-scroll">
               <PartsCatalog serial={selectedSerial} />
+            </div>
+          ) : (
+            <div className="catalog-scroll admin-scroll">
+              <AdminCatalogs />
             </div>
           )}
         </section>

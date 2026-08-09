@@ -8,7 +8,7 @@ export type IndexedPart = {
   category: string
   assemblyCode?: string
   assemblyTitle?: string
-  sourceType: 'mechanical' | 'electrical'
+  sourceType: 'mechanical' | 'electrical' | 'generic'
   searchText: string
 }
 
