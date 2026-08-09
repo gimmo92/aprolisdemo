@@ -1884,8 +1884,12 @@ button {
   color: #64748b;
 }
 
-.admin-catalog-main small {
+.admin-catalog-main .index-error {
   color: #b91c1c;
+}
+
+.admin-catalog-main .review-summary {
+  color: #64748b;
 }
 
 .status-dot {

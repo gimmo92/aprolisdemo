@@ -30,6 +30,13 @@ type AdminCatalog = {
     status: string
     progress: number
     error_message?: string
+    report?: {
+      deterministicParts?: number
+      aiParts?: number
+      unresolvedPages?: number[]
+      aiErrors?: Array<{ page?: number; code?: string; message?: string }>
+      detectedMetadata?: { missing?: string[] }
+    }
   }>
 }
 
@@ -45,6 +52,27 @@ function statusLabel(status: string) {
     failed: 'Errore',
   }
   return labels[status] || status
+}
+
+function reportSummary(
+  job: NonNullable<AdminCatalog['ingestion_jobs']>[number] | undefined,
+) {
+  const report = job?.report
+  const aiError = report?.aiErrors?.[0]
+  if (aiError) {
+    return `Claude: ${aiError.message || aiError.code || 'errore non specificato'}`
+  }
+  if (report?.unresolvedPages?.length) {
+    const preview = report.unresolvedPages.slice(0, 5).join(', ')
+    return `${report.unresolvedPages.length} pagine non risolte (${preview}${report.unresolvedPages.length > 5 ? ', …' : ''})`
+  }
+  if (report?.detectedMetadata?.missing?.length) {
+    return `Metadati mancanti: ${report.detectedMetadata.missing.join(', ')}`
+  }
+  if (report?.aiParts !== undefined) {
+    return `Estrazione: ${report.deterministicParts || 0} deterministici + ${report.aiParts} Claude`
+  }
+  return ''
 }
 
 export function AdminCatalogs() {
@@ -247,7 +275,15 @@ export function AdminCatalogs() {
       })
       const payload = await response.json()
       if (!response.ok) throw new Error(payload.error)
-      setMessage(`Catalogo aggiornato: ${payload.accepted || 0} ricambi indicizzati.`)
+      const detail = reportSummary({
+        id: retryableJob.id,
+        status: payload.status,
+        progress: 100,
+        report: payload.report,
+      })
+      setMessage(
+        `Catalogo aggiornato: ${payload.accepted || 0} ricambi indicizzati.${detail ? ` ${detail}.` : ''}`,
+      )
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Indicizzazione non riuscita.')
     } finally {
@@ -337,6 +373,7 @@ export function AdminCatalogs() {
         <div className="list-heading"><h3>Cataloghi</h3><button onClick={() => void refresh()}><RefreshCw size={16} /> Aggiorna</button></div>
         {catalogs.map((catalog) => {
           const job = catalog.ingestion_jobs?.at(0)
+          const summary = reportSummary(job)
           const state = ['ready', 'needs_review', 'failed'].includes(catalog.status)
             ? catalog.status
             : job?.status || catalog.status
@@ -346,7 +383,11 @@ export function AdminCatalogs() {
               <div className="admin-catalog-main">
                 <strong>{catalog.brand} · {catalog.model}</strong>
                 <span>{catalog.original_filename}</span>
-                {job?.error_message && <small>{job.error_message}</small>}
+                {job?.error_message ? (
+                  <small className="index-error">{job.error_message}</small>
+                ) : (
+                  summary && <small className="review-summary">{summary}</small>
+                )}
               </div>
               <span className="status-badge">{state === 'ready' && <CheckCircle2 size={14} />}{statusLabel(state)} {job?.progress ? `${job.progress}%` : ''}</span>
               <span>{catalog.part_count || 0} ricambi</span>

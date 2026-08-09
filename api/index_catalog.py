@@ -1352,8 +1352,10 @@ def _extract(
                 model,
             )
             ai_parts.extend(extracted)
-            # A schema-valid empty response also resolves a non-table page.
-            unresolved.discard(page_index)
+            # Empty is valid for a non-table page, but cannot resolve a page
+            # already flagged as a sparse/partial parts table.
+            if extracted or not page_results[page_index].parts:
+                unresolved.discard(page_index)
         except IndexingError as error:
             ai_errors.append(
                 {

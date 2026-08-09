@@ -266,7 +266,7 @@ class BaseAdapter:
             reasons.append("no_rows")
             if looks_like_parts_page(lines):
                 reasons.append("unparsed_table")
-        if len(parts) == 1 and looks_like_parts_page(lines):
+        if len(parts) == 1:
             reasons.append("sparse_table")
         if parts and confidence < 0.68:
             reasons.append("low_confidence")
@@ -538,7 +538,7 @@ class CharlatteAdapter(BaseAdapter):
             reasons.append("no_rows")
             if looks_like_parts_page(lines):
                 reasons.append("unparsed_table")
-        if len(parts) == 1 and looks_like_parts_page(lines):
+        if len(parts) == 1:
             reasons.append("sparse_table")
         if parts and confidence < 0.72:
             reasons.append("low_confidence")
