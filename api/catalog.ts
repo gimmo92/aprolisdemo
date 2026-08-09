@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
-import { getIndexStats, getPublicCatalog } from './lib/retrieval'
+import { getIndexStats, getPublicCatalog } from './lib/retrieval.js'
 
 export default function handler(request: VercelRequest, response: VercelResponse) {
   response.setHeader('Cache-Control', 'public, max-age=60, s-maxage=300')

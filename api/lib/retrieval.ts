@@ -1,6 +1,11 @@
-import rawIndex from '../../data/catalog-index.json'
-import { catalog as curatedCatalog } from '../../src/data/catalog'
-import type { CatalogIndex, IndexedCatalog, IndexedPart, PublicCatalog } from './types'
+import rawIndex from '../../data/catalog-index.json' with { type: 'json' }
+import { catalog as curatedCatalog } from '../../src/data/catalog.js'
+import type {
+  CatalogIndex,
+  IndexedCatalog,
+  IndexedPart,
+  PublicCatalog,
+} from './types.js'
 
 const index = rawIndex as CatalogIndex
 

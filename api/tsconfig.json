@@ -1,0 +1,4 @@
+{
+  "extends": "../tsconfig.api.json",
+  "include": ["./**/*.ts", "../src/data/catalog.ts"]
+}

@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { afterEach, describe, expect, it } from 'vitest'
-import catalogHandler from './catalog'
-import chatHandler from './chat'
+import catalogHandler from './catalog.js'
+import chatHandler from './chat.js'
 
 function mockResponse() {
   const result: {

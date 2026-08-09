@@ -4,7 +4,7 @@ import {
   getIndexStats,
   getPublicCatalog,
   searchParts,
-} from './retrieval'
+} from './retrieval.js'
 
 describe('catalog retrieval', () => {
   it('maps both supported serial numbers to the same catalog', () => {

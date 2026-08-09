@@ -1,8 +1,8 @@
 import Anthropic from '@anthropic-ai/sdk'
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { z } from 'zod'
-import { findCatalog, searchParts } from './lib/retrieval'
-import type { IndexedPart } from './lib/types'
+import { findCatalog, searchParts } from './lib/retrieval.js'
+import type { IndexedPart } from './lib/types.js'
 
 const requestSchema = z.object({
   serial: z.string().trim().min(4).max(32),
