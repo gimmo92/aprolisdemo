@@ -7,7 +7,9 @@ import {
   CircleHelp,
   FileText,
   Hash,
+  LibraryBig,
   LoaderCircle,
+  MessageCircle,
   PackageSearch,
   RotateCcw,
   Search,
@@ -19,6 +21,7 @@ import {
 } from 'lucide-react'
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { catalog, exampleSearches, type Part } from './data/catalog'
+import PartsCatalog from './components/PartsCatalog'
 import {
   ApiError,
   askPartsAssistant,
@@ -28,6 +31,7 @@ import {
 } from './lib/api'
 
 type Phase = 'serial' | 'search'
+type ActiveView = 'chat' | 'catalog'
 
 type Message = {
   id: number
@@ -138,6 +142,7 @@ function ChatMessage({ message }: { message: Message }) {
 
 function App() {
   const [phase, setPhase] = useState<Phase>('serial')
+  const [activeView, setActiveView] = useState<ActiveView>('chat')
   const [selectedSerial, setSelectedSerial] = useState<string>()
   const [catalogInfo, setCatalogInfo] = useState<CatalogInfo>()
   const [input, setInput] = useState('')
@@ -250,6 +255,7 @@ function App() {
   }
 
   const reset = () => {
+    setActiveView('chat')
     setPhase('serial')
     setSelectedSerial(undefined)
     setCatalogInfo(undefined)
@@ -354,11 +360,35 @@ function App() {
           </div>
         </aside>
 
-        <section className="chat-panel">
+        <section className={`chat-panel ${activeView === 'catalog' ? 'catalog-view' : ''}`}>
           <div className="chat-header">
             <div>
-              <span className="chat-online"><span /> Assistente online</span>
-              <h2>Ricerca ricambi</h2>
+              <span className="chat-online">
+                <span /> {activeView === 'chat' ? 'Assistente online' : 'Indice aggiornato'}
+              </span>
+              <h2>{activeView === 'chat' ? 'Ricerca ricambi' : 'Catalogo ricambi'}</h2>
+            </div>
+            <div className="view-tabs" role="tablist" aria-label="Sezione applicazione">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeView === 'chat'}
+                className={activeView === 'chat' ? 'active' : ''}
+                onClick={() => setActiveView('chat')}
+              >
+                <MessageCircle size={16} />
+                Chat
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeView === 'catalog'}
+                className={activeView === 'catalog' ? 'active' : ''}
+                onClick={() => setActiveView('catalog')}
+              >
+                <LibraryBig size={16} />
+                Tutti i ricambi
+              </button>
             </div>
             <div className="catalog-count">
               <PackageSearch size={19} />
@@ -366,53 +396,61 @@ function App() {
             </div>
           </div>
 
-          <div className="chat-scroll" ref={scrollArea}>
-            <div className="conversation">
-              {messages.map((message) => (
-                <ChatMessage key={message.id} message={message} />
-              ))}
-              {isThinking && (
-                <div className="message-row assistant">
-                  <div className="message-avatar"><Bot size={19} /></div>
-                  <div className="typing-indicator" aria-label="Ricerca in corso">
-                    <span />
-                    <span />
-                    <span />
-                  </div>
+          {activeView === 'chat' ? (
+            <>
+              <div className="chat-scroll" ref={scrollArea}>
+                <div className="conversation">
+                  {messages.map((message) => (
+                    <ChatMessage key={message.id} message={message} />
+                  ))}
+                  {isThinking && (
+                    <div className="message-row assistant">
+                      <div className="message-avatar"><Bot size={19} /></div>
+                      <div className="typing-indicator" aria-label="Ricerca in corso">
+                        <span />
+                        <span />
+                        <span />
+                      </div>
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
-          </div>
-
-          <div className="composer-wrap">
-            {phase === 'search' && (
-              <div className="suggestions">
-                <span>Ricerche rapide</span>
-                {exampleSearches.map((example) => (
-                  <button type="button" key={example} onClick={() => handleSuggestion(example)}>
-                    {example}
-                  </button>
-                ))}
               </div>
-            )}
-            <form className="composer" onSubmit={submit}>
-              <Search size={20} />
-              <input
-                autoFocus
-                value={input}
-                onChange={(event) => setInput(event.target.value)}
-                placeholder={placeholder}
-                aria-label={placeholder}
-              />
-              <button type="submit" disabled={!input.trim() || isThinking} aria-label="Invia">
-                {isThinking ? <LoaderCircle className="spin" size={19} /> : <Send size={19} />}
-              </button>
-            </form>
-            <p className="composer-note">
-              <ShieldCheck size={13} /> Risposte basate esclusivamente sul catalogo associato
-              <ArrowRight size={13} />
-            </p>
-          </div>
+
+              <div className="composer-wrap">
+                {phase === 'search' && (
+                  <div className="suggestions">
+                    <span>Ricerche rapide</span>
+                    {exampleSearches.map((example) => (
+                      <button type="button" key={example} onClick={() => handleSuggestion(example)}>
+                        {example}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <form className="composer" onSubmit={submit}>
+                  <Search size={20} />
+                  <input
+                    autoFocus
+                    value={input}
+                    onChange={(event) => setInput(event.target.value)}
+                    placeholder={placeholder}
+                    aria-label={placeholder}
+                  />
+                  <button type="submit" disabled={!input.trim() || isThinking} aria-label="Invia">
+                    {isThinking ? <LoaderCircle className="spin" size={19} /> : <Send size={19} />}
+                  </button>
+                </form>
+                <p className="composer-note">
+                  <ShieldCheck size={13} /> Risposte basate esclusivamente sul catalogo associato
+                  <ArrowRight size={13} />
+                </p>
+              </div>
+            </>
+          ) : (
+            <div className="catalog-scroll">
+              <PartsCatalog serial={selectedSerial} />
+            </div>
+          )}
         </section>
       </section>
     </main>

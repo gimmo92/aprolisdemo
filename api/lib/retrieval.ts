@@ -165,6 +165,20 @@ export function searchParts(serial: string, query: string, limit = 8) {
     .map(({ part }) => part)
 }
 
+export function getAllParts(serial: string) {
+  const catalog = findCatalog(serial)
+  if (!catalog) return undefined
+  return {
+    catalog: getPublicCatalog(serial)!,
+    parts: [...catalog.parts].sort(
+      (left, right) =>
+        left.page - right.page ||
+        left.item.localeCompare(right.item, 'it', { numeric: true }) ||
+        left.code.localeCompare(right.code),
+    ),
+  }
+}
+
 export function getIndexStats() {
   return {
     catalogs: catalogs.length,

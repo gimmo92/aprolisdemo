@@ -2,6 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { afterEach, describe, expect, it } from 'vitest'
 import catalogHandler from './catalog.js'
 import chatHandler from './chat.js'
+import partsHandler from './parts.js'
 
 function mockResponse() {
   const result: {
@@ -77,6 +78,33 @@ describe('API handlers', () => {
     expect(result.statusCode).toBe(503)
     expect(result.body).toMatchObject({
       error: expect.stringContaining('ANTHROPIC_API_KEY'),
+    })
+  })
+
+  it('returns the full indexed parts list with PDF references', () => {
+    const { response, result } = mockResponse()
+    const request = {
+      method: 'GET',
+      query: { serial: '13510073' },
+    } as unknown as VercelRequest
+
+    partsHandler(request, response)
+
+    expect(result.statusCode).toBe(200)
+    expect(result.body).toMatchObject({
+      catalog: { model: 'T135' },
+      parts: expect.arrayContaining([
+        expect.objectContaining({
+          code: 'LROEX100008',
+          page: 301,
+        }),
+      ]),
+      filters: {
+        categories: expect.any(Array),
+        sourceTypes: ['mechanical', 'electrical'],
+        pageMin: expect.any(Number),
+        pageMax: expect.any(Number),
+      },
     })
   })
 })

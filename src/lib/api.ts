@@ -18,6 +18,30 @@ export type ChatHistoryItem = {
   content: string
 }
 
+export type CatalogPart = {
+  code: string
+  description: string
+  originalDescription: string
+  quantity: number
+  item: string
+  page: number
+  category: string
+  sourceType: 'mechanical' | 'electrical'
+  assemblyCode?: string
+  assemblyTitle?: string
+}
+
+export type PartsIndexResponse = {
+  catalog: CatalogInfo
+  parts: CatalogPart[]
+  filters: {
+    categories: string[]
+    sourceTypes: Array<'mechanical' | 'electrical'>
+    pageMin: number
+    pageMax: number
+  }
+}
+
 type ChatResponse = {
   answer: string
   parts: Part[]
@@ -77,6 +101,12 @@ export async function identifyCatalog(serial: string) {
     `/api/catalog?serial=${encodeURIComponent(serial)}`,
   )
   return response.catalog
+}
+
+export function getIndexedParts(serial = '13510073') {
+  return apiFetch<PartsIndexResponse>(
+    `/api/parts?serial=${encodeURIComponent(serial)}`,
+  )
 }
 
 export function askPartsAssistant(
