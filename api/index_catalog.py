@@ -1302,6 +1302,7 @@ def _extract(
         if result.text_characters < MIN_TEXT_CHARACTERS
         or (bool(result.parts) and result.confidence < MIN_PAGE_CONFIDENCE)
         or "unparsed_table" in result.reasons
+        or "sparse_table" in result.reasons
     ]
     # Pages with actual low-confidence rows have priority over image-only pages.
     suspect_indexes.sort(
