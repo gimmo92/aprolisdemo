@@ -60,7 +60,7 @@ function reportSummary(
   const report = job?.report
   const aiError = report?.aiErrors?.[0]
   if (aiError) {
-    return `Claude: ${aiError.message || aiError.code || 'errore non specificato'}`
+    return `Claude${aiError.code ? ` [${aiError.code}]` : ''}: ${aiError.message || 'errore non specificato'}`
   }
   if (report?.unresolvedPages?.length) {
     const preview = report.unresolvedPages.slice(0, 5).join(', ')

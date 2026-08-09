@@ -776,17 +776,19 @@ def _anthropic_catalog_metadata(
                 ],
             }
         ],
-        "output_config": {
-            "format": {
-                "type": "json_schema",
-                "schema": {
+        "tools": [
+            {
+                "name": "record_catalog_metadata",
+                "description": "Record only catalog metadata visible in the PDF.",
+                "input_schema": {
                     "type": "object",
                     "additionalProperties": False,
                     "properties": fields,
                     "required": list(fields),
                 },
             }
-        },
+        ],
+        "tool_choice": {"type": "tool", "name": "record_catalog_metadata"},
     }
     request = Request(
         "https://api.anthropic.com/v1/messages",
@@ -821,24 +823,17 @@ def _anthropic_catalog_metadata(
         ) from error
 
     blocks = message.get("content") if isinstance(message, dict) else None
-    text = next(
+    detected = next(
         (
-            block.get("text")
+            block.get("input")
             for block in blocks or []
             if isinstance(block, dict)
-            and block.get("type") == "text"
-            and isinstance(block.get("text"), str)
+            and block.get("type") == "tool_use"
+            and block.get("name") == "record_catalog_metadata"
+            and isinstance(block.get("input"), dict)
         ),
         None,
     )
-    try:
-        detected = json.loads(text) if text else None
-    except json.JSONDecodeError as error:
-        raise IndexingError(
-            502,
-            "ANTHROPIC_METADATA_INVALID",
-            "Anthropic ha restituito metadati non validi.",
-        ) from error
     if not isinstance(detected, dict) or set(detected) != set(fields):
         raise IndexingError(
             502,
@@ -936,12 +931,14 @@ def _anthropic_parts(
                 ],
             }
         ],
-        "output_config": {
-            "format": {
-                "type": "json_schema",
-                "schema": _ai_schema(),
+        "tools": [
+            {
+                "name": "record_parts",
+                "description": "Record only spare-part rows visible in the PDF page.",
+                "input_schema": _ai_schema(),
             }
-        },
+        ],
+        "tool_choice": {"type": "tool", "name": "record_parts"},
     }
     timeout = _env_int("INDEX_AI_TIMEOUT_SECONDS", 45, 10, 120)
     request = Request(
@@ -985,27 +982,21 @@ def _anthropic_parts(
         ) from error
 
     blocks = message.get("content") if isinstance(message, dict) else None
-    text_blocks = [
-        block.get("text")
+    tool_inputs = [
+        block.get("input")
         for block in blocks or []
         if isinstance(block, dict)
-        and block.get("type") == "text"
-        and isinstance(block.get("text"), str)
+        and block.get("type") == "tool_use"
+        and block.get("name") == "record_parts"
+        and isinstance(block.get("input"), dict)
     ]
-    if len(text_blocks) != 1:
+    if len(tool_inputs) != 1:
         raise IndexingError(
             502,
             "ANTHROPIC_INVALID_JSON",
-            "Anthropic non ha restituito un singolo oggetto JSON.",
+            "Anthropic non ha invocato record_parts una sola volta.",
         )
-    try:
-        result = json.loads(text_blocks[0])
-    except json.JSONDecodeError as error:
-        raise IndexingError(
-            502,
-            "ANTHROPIC_INVALID_JSON",
-            "Anthropic ha restituito JSON non valido.",
-        ) from error
+    result = tool_inputs[0]
     if not isinstance(result, dict) or set(result) != {"confidence", "parts"}:
         raise IndexingError(
             502,
