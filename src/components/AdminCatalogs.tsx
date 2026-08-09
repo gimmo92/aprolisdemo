@@ -34,7 +34,18 @@ type AdminCatalog = {
       deterministicParts?: number
       aiParts?: number
       unresolvedPages?: number[]
-      aiErrors?: Array<{ page?: number; code?: string; message?: string }>
+      aiErrors?: Array<{
+        page?: number
+        code?: string
+        message?: string
+        details?: {
+          status?: number
+          response?: {
+            message?: string
+            error?: { type?: string; message?: string }
+          }
+        }
+      }>
       detectedMetadata?: { missing?: string[] }
     }
   }>
@@ -60,7 +71,10 @@ function reportSummary(
   const report = job?.report
   const aiError = report?.aiErrors?.[0]
   if (aiError) {
-    return `Claude${aiError.code ? ` [${aiError.code}]` : ''}: ${aiError.message || 'errore non specificato'}`
+    const upstream =
+      aiError.details?.response?.error?.message ||
+      aiError.details?.response?.message
+    return `Claude${aiError.code ? ` [${aiError.code}]` : ''}: ${upstream || aiError.message || 'errore non specificato'}`
   }
   if (report?.unresolvedPages?.length) {
     const preview = report.unresolvedPages.slice(0, 5).join(', ')
