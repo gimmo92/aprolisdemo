@@ -74,12 +74,13 @@ function mapCatalog(row: CatalogRow, serials: string[]): PublicCatalog {
 
 export async function findSupabaseCatalog(serial: string) {
   if (!isSupabaseConfigured()) return undefined
-  const normalized = serial.replace(/\D/g, '')
+  const normalized = serial.replace(/[^A-Za-z0-9]/g, '').toUpperCase()
   const supabase = getSupabaseAdmin()
   const { data: serialRow, error } = await supabase
     .from('catalog_serials')
-    .select('catalog_id, catalogs(*)')
-    .eq('serial_number', normalized)
+    .select('catalog_id, catalogs!inner(*)')
+    .eq('normalized_serial', normalized)
+    .eq('catalogs.status', 'ready')
     .limit(1)
     .maybeSingle()
 
@@ -106,7 +107,7 @@ export async function searchSupabaseParts(
 ) {
   if (!isSupabaseConfigured()) return undefined
   const { data, error } = await getSupabaseAdmin().rpc('search_parts', {
-    p_serial: serial.replace(/\D/g, ''),
+    p_serial: serial.replace(/[^A-Za-z0-9]/g, '').toUpperCase(),
     p_query: query,
     p_limit: Math.min(Math.max(limit, 1), 12),
   })

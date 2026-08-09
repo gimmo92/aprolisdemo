@@ -86,7 +86,11 @@ export default async function handler(
       .insert({ catalog_id: catalog.id, status: 'queued', progress: 0 })
       .select('id')
       .single()
-    if (jobError) return response.status(500).json({ error: jobError.message })
+    if (jobError) {
+      await supabase.from('catalogs').delete().eq('id', catalog.id)
+      await supabase.storage.from('catalogs').remove([input.storagePath])
+      return response.status(500).json({ error: jobError.message })
+    }
     return response.status(201).json({ catalogId: catalog.id, jobId: job?.id })
   }
 
