@@ -5,12 +5,19 @@ import {
   LoaderCircle,
   PackageOpen,
 } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   ApiError,
+  getExplodedPage,
   getIndexedParts,
   type CatalogPart,
+  type ExplodedPageResponse,
 } from '../lib/api'
+import {
+  fallbackHotspots,
+  renderExplodedPage,
+  type Hotspot,
+} from '../lib/pdfHotspots'
 
 type AssemblyGroup = {
   key: string
@@ -24,11 +31,15 @@ type AssemblyGroup = {
 }
 
 export default function ExplodedView() {
+  const canvasRef = useRef<HTMLCanvasElement>(null)
   const [parts, setParts] = useState<CatalogPart[]>([])
   const [catalogFilter, setCatalogFilter] = useState('')
   const [selectedKey, setSelectedKey] = useState('')
   const [selectedItem, setSelectedItem] = useState('')
+  const [pageMeta, setPageMeta] = useState<ExplodedPageResponse>()
+  const [hotspots, setHotspots] = useState<Hotspot[]>([])
   const [isLoading, setIsLoading] = useState(true)
+  const [isPageLoading, setIsPageLoading] = useState(false)
   const [error, setError] = useState('')
 
   useEffect(() => {
@@ -114,20 +125,90 @@ export default function ExplodedView() {
   )
 
   useEffect(() => {
-    setSelectedItem(selectedAssembly?.parts[0]?.item || '')
+    if (!selectedAssembly) {
+      setPageMeta(undefined)
+      setHotspots([])
+      setSelectedItem('')
+      return
+    }
+
+    let active = true
+    setIsPageLoading(true)
+    setError('')
+    setHotspots([])
+    setPageMeta(undefined)
+
+    const load = async () => {
+      if (!selectedAssembly.pdfAvailable) {
+        if (!active) return
+        setSelectedItem(selectedAssembly.parts[0]?.item || '')
+        setHotspots(
+          fallbackHotspots(selectedAssembly.parts.map((part) => part.item)),
+        )
+        return
+      }
+
+      const meta = await getExplodedPage(
+        selectedAssembly.catalogId,
+        selectedAssembly.page,
+      )
+      if (!active) return
+      setPageMeta(meta)
+      setSelectedItem(meta.parts[0]?.item || '')
+
+      let canvas = canvasRef.current
+      for (let attempt = 0; !canvas && attempt < 20; attempt += 1) {
+        await new Promise<void>((resolve) => {
+          requestAnimationFrame(() => resolve())
+        })
+        canvas = canvasRef.current
+      }
+      if (!canvas) {
+        throw new Error('Canvas disegno non disponibile.')
+      }
+      const nextHotspots = await renderExplodedPage(
+        meta.pdfUrl,
+        meta.page,
+        meta.parts.map((part) => part.item),
+        canvas,
+      )
+      if (!active) return
+      setHotspots(nextHotspots)
+    }
+
+    void load()
+      .catch((requestError: unknown) => {
+        if (!active) return
+        setPageMeta(undefined)
+        setHotspots(
+          fallbackHotspots(selectedAssembly.parts.map((part) => part.item)),
+        )
+        setSelectedItem(selectedAssembly.parts[0]?.item || '')
+        setError(
+          requestError instanceof ApiError
+            ? requestError.message
+            : requestError instanceof Error
+              ? requestError.message
+              : 'Esploso non disponibile per questa pagina.',
+        )
+      })
+      .finally(() => {
+        if (active) setIsPageLoading(false)
+      })
+
+    return () => {
+      active = false
+    }
   }, [selectedAssembly])
 
-  const activeParts = selectedAssembly?.parts || []
+  const activeParts = pageMeta?.parts || selectedAssembly?.parts || []
   const selectedPart =
     activeParts.find((part) => part.item === selectedItem) || activeParts[0]
   const selectedIndex = Math.max(
     0,
     visibleAssemblies.findIndex((assembly) => assembly.key === selectedKey),
   )
-  const pdfSrc =
-    selectedAssembly?.pdfAvailable
-      ? `/api/pdf?catalogId=${encodeURIComponent(selectedAssembly.catalogId)}&page=${selectedAssembly.page}`
-      : ''
+  const showDrawing = Boolean(selectedAssembly?.pdfAvailable && !error)
 
   if (isLoading) {
     return (
@@ -158,7 +239,7 @@ export default function ExplodedView() {
         <div>
           <span className="catalog-kicker">Tavole interattive</span>
           <h2>Esplosi catalogo</h2>
-          <p>Clicca un pallino numerato per aprire il ricambio corrispondente.</p>
+          <p>Clicca un pallino sul disegno per aprire il ricambio corrispondente.</p>
         </div>
         <label className="exploded-catalog-filter">
           <span>Macchina</span>
@@ -225,33 +306,115 @@ export default function ExplodedView() {
             </button>
           </div>
 
-          <div className="exploded-canvas-wrap exploded-split">
-            <div className="exploded-pdf-frame">
-              {pdfSrc ? (
-                <iframe title={`Esploso pagina ${selectedAssembly?.page}`} src={pdfSrc} />
-              ) : (
-                <div className="exploded-canvas-state">
-                  <PackageOpen size={24} />
-                  <span>PDF non disponibile per questa tavola. Usa i pallini a destra.</span>
-                </div>
-              )}
+          <div className="exploded-canvas-wrap">
+            {isPageLoading && (
+              <div className="exploded-canvas-state">
+                <LoaderCircle className="spin" size={24} />
+                <span>Rendering disegno interattivo…</span>
+              </div>
+            )}
+
+            <div
+              className="exploded-canvas"
+              hidden={isPageLoading || !showDrawing}
+            >
+              <div className="exploded-drawing">
+                <canvas ref={canvasRef} />
+                <svg
+                  className="exploded-hotspot-layer"
+                  viewBox="0 0 1000 1000"
+                  preserveAspectRatio="none"
+                  role="img"
+                  aria-label="Posizioni cliccabili sull’esploso"
+                >
+                  {hotspots.map((hotspot, index) => {
+                    const cx = hotspot.x * 1000
+                    const cy = hotspot.y * 1000
+                    const active = selectedItem === hotspot.item
+                    return (
+                      <g
+                        key={`${hotspot.item}-${hotspot.x}-${hotspot.y}`}
+                        className={`exploded-callout ${active ? 'active' : ''} ${
+                          hotspot.synthetic ? 'synthetic' : ''
+                        }`}
+                        style={{ animationDelay: `${Math.min(index, 12) * 35}ms` }}
+                        onClick={() => setSelectedItem(hotspot.item)}
+                        role="button"
+                        tabIndex={0}
+                        aria-label={`Ricambio posizione ${hotspot.item}`}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault()
+                            setSelectedItem(hotspot.item)
+                          }
+                        }}
+                      >
+                        <circle className="exploded-callout-halo" cx={cx} cy={cy} r="22" />
+                        <circle className="exploded-callout-dot" cx={cx} cy={cy} r="16" />
+                        <text
+                          x={cx}
+                          y={cy}
+                          dominantBaseline="central"
+                          textAnchor="middle"
+                        >
+                          {hotspot.item}
+                        </text>
+                        <title>{`Pos. ${hotspot.item}`}</title>
+                      </g>
+                    )
+                  })}
+                </svg>
+              </div>
             </div>
 
-            <div className="exploded-hotspot-board" aria-label="Posizioni cliccabili">
-              {activeParts.map((part) => (
-                <button
-                  key={`${part.item}-${part.code}`}
-                  type="button"
-                  className={`exploded-hotspot static ${
-                    selectedItem === part.item ? 'active' : ''
-                  }`}
-                  onClick={() => setSelectedItem(part.item)}
-                  title={part.description}
+            {!isPageLoading && !showDrawing && (
+              <div className="exploded-canvas exploded-canvas-fallback">
+                <svg
+                  className="exploded-fallback-board"
+                  viewBox="0 0 1000 1000"
+                  role="img"
+                  aria-label="Posizioni ricambio"
                 >
-                  {part.item || '·'}
-                </button>
-              ))}
-            </div>
+                  <rect width="1000" height="1000" className="exploded-fallback-bg" />
+                  {hotspots.map((hotspot) => {
+                    const cx = hotspot.x * 1000
+                    const cy = hotspot.y * 1000
+                    const active = selectedItem === hotspot.item
+                    return (
+                      <g
+                        key={`${hotspot.item}-${hotspot.x}-${hotspot.y}`}
+                        className={`exploded-callout ${active ? 'active' : ''} synthetic`}
+                        onClick={() => setSelectedItem(hotspot.item)}
+                        role="button"
+                        tabIndex={0}
+                        aria-label={`Ricambio posizione ${hotspot.item}`}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault()
+                            setSelectedItem(hotspot.item)
+                          }
+                        }}
+                      >
+                        <circle className="exploded-callout-halo" cx={cx} cy={cy} r="28" />
+                        <circle className="exploded-callout-dot" cx={cx} cy={cy} r="20" />
+                        <text
+                          x={cx}
+                          y={cy}
+                          dominantBaseline="central"
+                          textAnchor="middle"
+                        >
+                          {hotspot.item}
+                        </text>
+                      </g>
+                    )
+                  })}
+                </svg>
+                <p>
+                  {error ||
+                    'PDF non disponibile per questa tavola: usa i pallini per scegliere il ricambio.'}
+                </p>
+              </div>
+            )}
           </div>
         </section>
 

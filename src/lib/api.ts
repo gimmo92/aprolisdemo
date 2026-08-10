@@ -48,6 +48,15 @@ export type PartsIndexResponse = {
   }
 }
 
+export type ExplodedPageResponse = {
+  catalog: CatalogInfo
+  page: number
+  assemblyTitle: string
+  assemblyCode: string
+  pdfUrl: string
+  parts: CatalogPart[]
+}
+
 type ChatResponse = {
   answer: string
   parts: Part[]
@@ -114,6 +123,12 @@ export function getIndexedParts(serial?: string) {
     serial
       ? `/api/parts?serial=${encodeURIComponent(serial)}`
       : '/api/parts?scope=all',
+  )
+}
+
+export function getExplodedPage(catalogId: string, page: number) {
+  return apiFetch<ExplodedPageResponse>(
+    `/api/esplosi?catalogId=${encodeURIComponent(catalogId)}&page=${page}`,
   )
 }
 
