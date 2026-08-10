@@ -5,6 +5,7 @@ import {
   Check,
   CircleHelp,
   FileText,
+  Layers,
   LibraryBig,
   LoaderCircle,
   MessageCircle,
@@ -19,6 +20,7 @@ import {
 import { FormEvent, useEffect, useRef, useState } from 'react'
 import { catalog, exampleSearches, type Part } from './data/catalog'
 import PartsCatalog from './components/PartsCatalog'
+import ExplodedView from './components/ExplodedView'
 import { AdminCatalogs } from './components/AdminCatalogs'
 import {
   ApiError,
@@ -29,7 +31,7 @@ import {
 } from './lib/api'
 
 type Phase = 'serial' | 'search'
-type ActiveView = 'chat' | 'catalog' | 'admin'
+type ActiveView = 'chat' | 'catalog' | 'esplosi' | 'admin'
 
 type Message = {
   id: number
@@ -292,9 +294,24 @@ function App() {
           <div className="chat-header">
             <div>
               <span className="chat-online">
-                <span /> {activeView === 'chat' ? 'Assistente online' : activeView === 'catalog' ? 'Indice aggiornato' : 'Area protetta'}
+                <span />{' '}
+                {activeView === 'chat'
+                  ? 'Assistente online'
+                  : activeView === 'catalog'
+                    ? 'Indice aggiornato'
+                    : activeView === 'esplosi'
+                      ? 'Tavole interattive'
+                      : 'Area protetta'}
               </span>
-              <h2>{activeView === 'chat' ? 'Ricerca ricambi' : activeView === 'catalog' ? 'Catalogo ricambi' : 'Amministrazione'}</h2>
+              <h2>
+                {activeView === 'chat'
+                  ? 'Ricerca ricambi'
+                  : activeView === 'catalog'
+                    ? 'Catalogo ricambi'
+                    : activeView === 'esplosi'
+                      ? 'Esplosi'
+                      : 'Amministrazione'}
+              </h2>
             </div>
             <div className="view-tabs" role="tablist" aria-label="Sezione applicazione">
               <button
@@ -316,6 +333,16 @@ function App() {
               >
                 <LibraryBig size={16} />
                 Tutti i ricambi
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeView === 'esplosi'}
+                className={activeView === 'esplosi' ? 'active' : ''}
+                onClick={() => setActiveView('esplosi')}
+              >
+                <Layers size={16} />
+                Esplosi
               </button>
               <button
                 type="button"
@@ -387,6 +414,10 @@ function App() {
           ) : activeView === 'catalog' ? (
             <div className="catalog-scroll">
               <PartsCatalog />
+            </div>
+          ) : activeView === 'esplosi' ? (
+            <div className="catalog-scroll">
+              <ExplodedView />
             </div>
           ) : (
             <div className="catalog-scroll admin-scroll">

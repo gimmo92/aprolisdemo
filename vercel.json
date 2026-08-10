@@ -6,6 +6,9 @@
     "api/index_catalog.py": {
       "maxDuration": 300
     },
+    "api/esplosi.py": {
+      "maxDuration": 60
+    },
     "api/admin/catalogs.ts": {
       "maxDuration": 60
     }
