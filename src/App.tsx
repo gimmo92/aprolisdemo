@@ -3,10 +3,8 @@ import {
   Bot,
   Box,
   Check,
-  ChevronRight,
   CircleHelp,
   FileText,
-  Hash,
   LibraryBig,
   LoaderCircle,
   MessageCircle,
@@ -15,12 +13,10 @@ import {
   Search,
   Send,
   ShieldCheck,
-  Sparkles,
   UploadCloud,
   UserRound,
-  Wrench,
 } from 'lucide-react'
-import { FormEvent, useEffect, useMemo, useRef, useState } from 'react'
+import { FormEvent, useEffect, useRef, useState } from 'react'
 import { catalog, exampleSearches, type Part } from './data/catalog'
 import PartsCatalog from './components/PartsCatalog'
 import { AdminCatalogs } from './components/AdminCatalogs'
@@ -29,7 +25,6 @@ import {
   askPartsAssistant,
   getCatalogStats,
   identifyCatalog,
-  type CatalogInfo,
   type ChatHistoryItem,
 } from './lib/api'
 
@@ -147,7 +142,6 @@ function App() {
   const [phase, setPhase] = useState<Phase>('serial')
   const [activeView, setActiveView] = useState<ActiveView>('chat')
   const [selectedSerial, setSelectedSerial] = useState<string>()
-  const [catalogInfo, setCatalogInfo] = useState<CatalogInfo>()
   const [input, setInput] = useState('')
   const [messages, setMessages] = useState<Message[]>([initialMessage])
   const [isThinking, setIsThinking] = useState(false)
@@ -159,8 +153,6 @@ function App() {
     phase === 'serial'
       ? 'Es. 13510073'
       : 'Descrivi il ricambio, es. “fusibile 500A”'
-
-  const progress = useMemo(() => (phase === 'serial' ? 1 : 2), [phase])
 
   useEffect(() => {
     getCatalogStats()
@@ -187,7 +179,6 @@ function App() {
 
     try {
       const identifiedCatalog = await identifyCatalog(cleanSerial)
-      setCatalogInfo(identifiedCatalog)
       setSelectedSerial(cleanSerial)
       setPhase('search')
       addMessage({
@@ -268,7 +259,6 @@ function App() {
     setActiveView('chat')
     setPhase('serial')
     setSelectedSerial(undefined)
-    setCatalogInfo(undefined)
     setInput('')
     setIsThinking(false)
     messageId.current = 2
@@ -298,78 +288,6 @@ function App() {
       </header>
 
       <section className="workspace">
-        <aside className="sidebar">
-          <div className="sidebar-intro">
-            <div className="eyebrow">
-              <Sparkles size={14} />
-              Ricerca assistita
-            </div>
-            <h1>Il ricambio giusto, senza sfogliare il catalogo.</h1>
-            <p>
-              Parti dalla matricola e descrivi ciò che ti serve. Il sistema
-              consulta solo la documentazione compatibile.
-            </p>
-          </div>
-
-          <div className="steps">
-            <div className={`step ${progress >= 1 ? 'active' : ''}`}>
-              <span className="step-number">{phase === 'search' ? <Check size={15} /> : '1'}</span>
-              <div>
-                <strong>Identifica il mezzo</strong>
-                <small>{selectedSerial ? `Matricola ${selectedSerial}` : 'Inserisci la matricola'}</small>
-              </div>
-            </div>
-            <div className="step-line" />
-            <div className={`step ${progress >= 2 ? 'active' : ''}`}>
-              <span className="step-number">2</span>
-              <div>
-                <strong>Cerca il ricambio</strong>
-                <small>Scrivi nome, funzione o codice</small>
-              </div>
-            </div>
-          </div>
-
-          {selectedSerial ? (
-            <div className="machine-card">
-              <div className="machine-card-header">
-                <div className="machine-icon"><Wrench size={19} /></div>
-                <div>
-                  <span>Mezzo identificato</span>
-                  <strong>{catalogInfo?.model ?? catalog.model}</strong>
-                </div>
-                <ShieldCheck size={20} />
-              </div>
-              <dl>
-                <div><dt>Marca</dt><dd>{catalogInfo?.brand ?? 'Charlatte'}</dd></div>
-                <div><dt>Matricola</dt><dd>{selectedSerial}</dd></div>
-                <div><dt>Versione</dt><dd>PH1 80V</dd></div>
-                <div><dt>Catalogo</dt><dd>{catalogInfo?.documentPages ?? catalog.documentPages} pagine</dd></div>
-              </dl>
-            </div>
-          ) : (
-            <button
-              className="demo-serial-card"
-              type="button"
-              onClick={() => handleSuggestion('13510073')}
-            >
-              <span className="demo-icon"><Hash size={18} /></span>
-              <span>
-                <small>Prova la matricola demo</small>
-                <strong>13510073</strong>
-              </span>
-              <ChevronRight size={18} />
-            </button>
-          )}
-
-          <div className="trust-note">
-            <FileText size={17} />
-            <p>
-              <strong>Fonte verificabile</strong>
-              Ogni risultato rimanda alla pagina del catalogo originale.
-            </p>
-          </div>
-        </aside>
-
         <section className={`chat-panel ${activeView !== 'chat' ? 'catalog-view' : ''}`}>
           <div className="chat-header">
             <div>
@@ -412,7 +330,7 @@ function App() {
             </div>
             <div className={`catalog-count ${activeView === 'admin' ? 'hidden' : ''}`}>
               <PackageSearch size={19} />
-              <span><strong>{activeView === 'chat' && catalogInfo ? catalogInfo.partCount : indexedPartCount}</strong> ricambi indicizzati</span>
+              <span><strong>{indexedPartCount}</strong> ricambi indicizzati</span>
             </div>
           </div>
 
