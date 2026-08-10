@@ -3,7 +3,9 @@ import type { Session } from '@supabase/supabase-js'
 import * as tus from 'tus-js-client'
 import {
   AlertCircle,
+  BadgeCheck,
   CheckCircle2,
+  FileSearch,
   FileUp,
   LoaderCircle,
   LogIn,
@@ -22,6 +24,7 @@ type AdminCatalog = {
   brand: string
   model: string
   original_filename: string
+  storage_path: string
   status: string
   part_count: number
   created_at: string
@@ -62,6 +65,7 @@ type ApiPayload = {
   status?: string
   accepted?: number
   report?: NonNullable<AdminCatalog['ingestion_jobs']>[number]['report']
+  approved?: boolean
 }
 
 function statusLabel(status: string) {
@@ -351,6 +355,45 @@ export function AdminCatalogs() {
     }
   }
 
+  async function openReviewPage(catalog: AdminCatalog, page: number) {
+    if (!supabase) return
+    const preview = window.open('about:blank', '_blank')
+    const { data, error } = await supabase.storage
+      .from('catalogs')
+      .createSignedUrl(catalog.storage_path, 300)
+    if (error || !data?.signedUrl) {
+      preview?.close()
+      setMessage(error?.message || 'Impossibile aprire il PDF.')
+      return
+    }
+    const url = `${data.signedUrl}#page=${page}`
+    if (preview) preview.location.href = url
+    else window.open(url, '_blank', 'noopener,noreferrer')
+  }
+
+  async function approveCatalog(catalog: AdminCatalog) {
+    if (
+      !authHeaders ||
+      !window.confirm(
+        `Confermi di aver verificato ${catalog.original_filename} e di volerlo rendere operativo?`,
+      )
+    ) return
+    setBusy(true)
+    const response = await fetch('/api/admin/catalogs', {
+      method: 'PATCH',
+      headers: authHeaders,
+      body: JSON.stringify({ action: 'approve', catalogId: catalog.id }),
+    })
+    const payload = await readApiPayload(response)
+    setMessage(
+      response.ok
+        ? 'Catalogo approvato e disponibile nella ricerca.'
+        : payload.error || 'Approvazione non riuscita.',
+    )
+    setBusy(false)
+    await refresh()
+  }
+
   if (loading) return <div className="admin-empty"><LoaderCircle className="spin" /></div>
   if (!supabase) {
     return (
@@ -437,6 +480,13 @@ export function AdminCatalogs() {
           const state = ['ready', 'needs_review', 'failed'].includes(catalog.status)
             ? catalog.status
             : job?.status || catalog.status
+          const reviewPage = job?.report?.unresolvedPages?.[0]
+          const retryableReview =
+            state === 'needs_review' &&
+            Boolean(
+              job?.report?.remainingAiPages?.length ||
+              job?.report?.aiErrors?.length,
+            )
           return (
             <article key={catalog.id} className="admin-catalog-row">
               <div className={`status-dot ${state}`} />
@@ -452,8 +502,14 @@ export function AdminCatalogs() {
               <span className="status-badge">{state === 'ready' && <CheckCircle2 size={14} />}{statusLabel(state)} {job?.progress ? `${job.progress}%` : ''}</span>
               <span>{catalog.part_count || 0} ricambi</span>
               <div className="admin-row-actions">
-                {(['failed', 'needs_review'].includes(state) || stale) && (
+                {(state === 'failed' || retryableReview || stale) && (
                   <button className="icon-retry" onClick={() => void retryCatalog(catalog)} disabled={busy} aria-label="Riprova indicizzazione"><RefreshCw size={17} /></button>
+                )}
+                {state === 'needs_review' && reviewPage && (
+                  <button className="icon-review" onClick={() => void openReviewPage(catalog, reviewPage)} disabled={busy} aria-label={`Apri pagina ${reviewPage}`} title={`Apri pagina ${reviewPage}`}><FileSearch size={17} /></button>
+                )}
+                {state === 'needs_review' && (
+                  <button className="icon-approve" onClick={() => void approveCatalog(catalog)} disabled={busy} aria-label="Approva catalogo" title="Approva catalogo"><BadgeCheck size={17} /></button>
                 )}
                 <button className="icon-danger" onClick={() => void removeCatalog(catalog)} disabled={busy} aria-label="Elimina catalogo"><Trash2 size={17} /></button>
               </div>

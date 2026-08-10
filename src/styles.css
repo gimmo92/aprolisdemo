@@ -1945,6 +1945,24 @@ button {
   border-radius: 8px;
 }
 
+.icon-review,
+.icon-approve {
+  padding: 7px;
+  cursor: pointer;
+  border: 0;
+  border-radius: 8px;
+}
+
+.icon-review {
+  color: #1d4ed8;
+  background: #eff6ff;
+}
+
+.icon-approve {
+  color: #15803d;
+  background: #f0fdf4;
+}
+
 .admin-auth,
 .admin-empty {
   max-width: 440px;
