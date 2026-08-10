@@ -65,9 +65,11 @@ def is_noise(value: str) -> bool:
     )
 
 
-def _as_quantity(value: str) -> int | float | None:
+def _as_quantity(value: str | None) -> int | float | None:
+    if value is None:
+        return None
     value = value.strip().replace(",", ".")
-    if not QTY_RE.fullmatch(value):
+    if not value or not QTY_RE.fullmatch(value):
         return None
     number = float(value)
     return int(number) if number.is_integer() else number
@@ -95,15 +97,24 @@ def looks_like_parts_page(lines: Sequence[TextLine]) -> bool:
         for term in (
             "item",
             "position",
+            "posizione",
             "repere",
             "reference",
             "part number",
+            "part no",
             "code",
+            "codice",
             "designation",
             "description",
+            "descrizione",
+            "denominazione",
             "quantity",
             "qty",
             "qte",
+            "qta",
+            "quantita",
+            "pezzi",
+            "ricambi",
         )
     )
     code_hits = sum(
@@ -406,8 +417,8 @@ class BaseAdapter:
                         code=code,
                         description=values["description"],
                         original_description=values["description"],
-                        quantity=_as_quantity(values.get("quantity", "")),
-                        item=values.get("item", ""),
+                        quantity=_as_quantity(values.get("quantity") or ""),
+                        item=values.get("item") or "",
                         page=page_number,
                         category=category,
                         source_type="line_pattern",
@@ -570,11 +581,32 @@ class FiorentiniAdapter(BaseAdapter):
     name = "fiorentini"
     header_aliases = {
         **BaseAdapter.header_aliases,
-        "item": ("pos", "posizione", "rif", "item"),
-        "code": ("codice", "code", "part number"),
-        "description": ("descrizione", "description", "denominazione"),
-        "quantity": ("qta", "quantita", "qty"),
+        "item": ("pos", "posizione", "rif", "item", "n", "nr"),
+        "code": ("codice", "code", "part number", "part no", "articolo"),
+        "description": (
+            "descrizione",
+            "description",
+            "denominazione",
+            "designazione",
+        ),
+        "quantity": ("qta", "q.ta", "q.tà", "quantita", "qty", "q.ty", "pezzi"),
     }
+
+    def line_regexes(self) -> tuple[re.Pattern[str], ...]:
+        return (
+            *super().line_regexes(),
+            re.compile(
+                r"^(?P<item>\d+(?:[.\-]\d+)*)\s+"
+                r"(?P<code>(?=\S{4,40}\s)(?=\S*\d)\S+)\s+"
+                r"(?P<description>.+?)(?:\s+(?P<quantity>\d{1,4}))?$",
+                re.I,
+            ),
+            re.compile(
+                r"^(?P<code>(?=\S{5,40}\s)(?=\S*\d)\S+)\s+"
+                r"(?P<description>[A-Za-zÀ-ÿ0-9].+?)(?:\s+(?P<quantity>\d{1,4}))?$",
+                re.I,
+            ),
+        )
 
 
 class GenericAdapter(BaseAdapter):

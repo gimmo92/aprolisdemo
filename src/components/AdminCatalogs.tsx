@@ -253,7 +253,14 @@ export function AdminCatalogs() {
         throw new Error(latest.error || 'Indicizzazione non riuscita.')
       }
       const remaining = latest.report?.remainingAiPages?.length || 0
-      if (!remaining || latest.report?.aiErrors?.length) return latest
+      const fatalAi = (latest.report?.aiErrors || []).some((error) =>
+        ['ANTHROPIC_NOT_CONFIGURED', 'ANTHROPIC_AUTH_ERROR'].includes(
+          String(error.code || ''),
+        ),
+      )
+      // Keep walking remaining Claude pages even when early pages return 0 rows
+      // (covers/legends) or soft per-page AI errors.
+      if (!remaining || fatalAi) return latest
       setMessage(
         `Indicizzazione in corso: ${remaining} pagine Claude ancora da elaborare…`,
       )
