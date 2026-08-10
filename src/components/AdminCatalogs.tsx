@@ -302,7 +302,11 @@ export function AdminCatalogs() {
       { method: 'DELETE', headers: authHeaders },
     )
     const payload = await readApiPayload(response)
-    setMessage(response.ok ? 'Catalogo eliminato.' : payload.error)
+    setMessage(
+      response.ok
+        ? 'Catalogo eliminato.'
+        : payload.error || 'Eliminazione non riuscita.',
+    )
     setBusy(false)
     await refresh()
   }
@@ -329,7 +333,7 @@ export function AdminCatalogs() {
       }
       const detail = reportSummary({
         id: retryableJob.id,
-        status: payload.status,
+        status: payload.status || 'needs_review',
         progress: 100,
         report: payload.report,
       })
