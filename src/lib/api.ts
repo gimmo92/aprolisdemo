@@ -117,39 +117,6 @@ export function getIndexedParts(serial?: string) {
   )
 }
 
-export type ExplodedPageResponse = {
-  catalog: CatalogInfo
-  page: number
-  assemblyTitle: string
-  assemblyCode: string
-  pdfUrl: string
-  parts: CatalogPart[]
-}
-
-export async function getExplodedPage(catalogId: string, page: number) {
-  const controller = new AbortController()
-  const timeout = window.setTimeout(() => controller.abort(), 90_000)
-  try {
-    const response = await fetch(
-      `/api/esplosi?catalogId=${encodeURIComponent(catalogId)}&page=${page}`,
-      { signal: controller.signal },
-    )
-    const body = (await response.json()) as ExplodedPageResponse & { error?: string }
-    if (!response.ok) {
-      throw new ApiError(body.error || 'Esploso non disponibile.', response.status)
-    }
-    return body
-  } catch (error) {
-    if (error instanceof ApiError) throw error
-    if (error instanceof DOMException && error.name === 'AbortError') {
-      throw new ApiError('Il rendering della tavola sta impiegando troppo tempo.', 408)
-    }
-    throw new ApiError('Impossibile caricare l’esploso.', 0)
-  } finally {
-    window.clearTimeout(timeout)
-  }
-}
-
 export function getCatalogStats() {
   return apiFetch<{ stats: { catalogs: number; parts: number } }>('/api/catalog')
 }

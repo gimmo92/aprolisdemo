@@ -8,10 +8,8 @@ import {
 import { useEffect, useMemo, useState } from 'react'
 import {
   ApiError,
-  getExplodedPage,
   getIndexedParts,
   type CatalogPart,
-  type ExplodedPageResponse,
 } from '../lib/api'
 
 type AssemblyGroup = {
@@ -30,9 +28,7 @@ export default function ExplodedView() {
   const [catalogFilter, setCatalogFilter] = useState('')
   const [selectedKey, setSelectedKey] = useState('')
   const [selectedItem, setSelectedItem] = useState('')
-  const [pageMeta, setPageMeta] = useState<ExplodedPageResponse>()
   const [isLoading, setIsLoading] = useState(true)
-  const [isPageLoading, setIsPageLoading] = useState(false)
   const [error, setError] = useState('')
 
   useEffect(() => {
@@ -118,59 +114,20 @@ export default function ExplodedView() {
   )
 
   useEffect(() => {
-    if (!selectedAssembly) {
-      setPageMeta(undefined)
-      setSelectedItem('')
-      return
-    }
-
-    let active = true
-    setIsPageLoading(true)
-    setError('')
-    setPageMeta(undefined)
-
-    const load = async () => {
-      if (!selectedAssembly.pdfAvailable) {
-        if (!active) return
-        setSelectedItem(selectedAssembly.parts[0]?.item || '')
-        return
-      }
-      const meta = await getExplodedPage(
-        selectedAssembly.catalogId,
-        selectedAssembly.page,
-      )
-      if (!active) return
-      setPageMeta(meta)
-      setSelectedItem(meta.parts[0]?.item || '')
-    }
-
-    void load()
-      .catch((requestError: unknown) => {
-        if (!active) return
-        setPageMeta(undefined)
-        setSelectedItem(selectedAssembly.parts[0]?.item || '')
-        setError(
-          requestError instanceof ApiError
-            ? requestError.message
-            : 'Esploso non disponibile per questa pagina.',
-        )
-      })
-      .finally(() => {
-        if (active) setIsPageLoading(false)
-      })
-
-    return () => {
-      active = false
-    }
+    setSelectedItem(selectedAssembly?.parts[0]?.item || '')
   }, [selectedAssembly])
 
-  const activeParts = pageMeta?.parts || selectedAssembly?.parts || []
+  const activeParts = selectedAssembly?.parts || []
   const selectedPart =
     activeParts.find((part) => part.item === selectedItem) || activeParts[0]
   const selectedIndex = Math.max(
     0,
     visibleAssemblies.findIndex((assembly) => assembly.key === selectedKey),
   )
+  const pdfSrc =
+    selectedAssembly?.pdfAvailable
+      ? `/api/pdf?catalogId=${encodeURIComponent(selectedAssembly.catalogId)}&page=${selectedAssembly.page}`
+      : ''
 
   if (isLoading) {
     return (
@@ -184,10 +141,13 @@ export default function ExplodedView() {
 
   if (!assemblies.length) {
     return (
-      <div className="catalog-state">
+      <div className="catalog-state error">
         <PackageOpen size={27} />
         <strong>Nessun esploso disponibile</strong>
-        <span>Indicizza un catalogo con ricambi per pagina per navigare le tavole.</span>
+        <span>
+          {error ||
+            'Indicizza un catalogo con ricambi per pagina per navigare le tavole.'}
+        </span>
       </div>
     )
   }
@@ -267,23 +227,12 @@ export default function ExplodedView() {
 
           <div className="exploded-canvas-wrap exploded-split">
             <div className="exploded-pdf-frame">
-              {isPageLoading ? (
-                <div className="exploded-canvas-state">
-                  <LoaderCircle className="spin" size={24} />
-                  <span>Caricamento tavola…</span>
-                </div>
-              ) : pageMeta?.pdfUrl ? (
-                <iframe
-                  title={`Esploso pagina ${pageMeta.page}`}
-                  src={`${pageMeta.pdfUrl}#page=${pageMeta.page}&view=FitH`}
-                />
+              {pdfSrc ? (
+                <iframe title={`Esploso pagina ${selectedAssembly?.page}`} src={pdfSrc} />
               ) : (
                 <div className="exploded-canvas-state">
                   <PackageOpen size={24} />
-                  <span>
-                    {error ||
-                      'PDF non disponibile per questa tavola. Usa i pallini a destra.'}
-                  </span>
+                  <span>PDF non disponibile per questa tavola. Usa i pallini a destra.</span>
                 </div>
               )}
             </div>
