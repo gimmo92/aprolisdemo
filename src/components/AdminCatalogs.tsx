@@ -42,6 +42,7 @@ type AdminCatalog = {
         message?: string
         details?: {
           status?: number
+          reason?: string
           response?: {
             message?: string
             error?: { type?: string; message?: string }
@@ -85,7 +86,8 @@ function reportSummary(
   if (aiError) {
     const upstream =
       aiError.details?.response?.error?.message ||
-      aiError.details?.response?.message
+      aiError.details?.response?.message ||
+      aiError.details?.reason
     return `Claude${aiError.code ? ` [${aiError.code}]` : ''}: ${upstream || aiError.message || 'errore non specificato'}`
   }
   if (report?.unresolvedPages?.length) {
