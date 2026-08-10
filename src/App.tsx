@@ -27,6 +27,7 @@ import { AdminCatalogs } from './components/AdminCatalogs'
 import {
   ApiError,
   askPartsAssistant,
+  getCatalogStats,
   identifyCatalog,
   type CatalogInfo,
   type ChatHistoryItem,
@@ -150,6 +151,7 @@ function App() {
   const [input, setInput] = useState('')
   const [messages, setMessages] = useState<Message[]>([initialMessage])
   const [isThinking, setIsThinking] = useState(false)
+  const [indexedPartCount, setIndexedPartCount] = useState(585)
   const messageId = useRef(2)
   const scrollArea = useRef<HTMLDivElement>(null)
 
@@ -159,6 +161,12 @@ function App() {
       : 'Descrivi il ricambio, es. “fusibile 500A”'
 
   const progress = useMemo(() => (phase === 'serial' ? 1 : 2), [phase])
+
+  useEffect(() => {
+    getCatalogStats()
+      .then(({ stats }) => setIndexedPartCount(stats.parts))
+      .catch(() => undefined)
+  }, [])
 
   useEffect(() => {
     const area = scrollArea.current
@@ -404,7 +412,7 @@ function App() {
             </div>
             <div className={`catalog-count ${activeView === 'admin' ? 'hidden' : ''}`}>
               <PackageSearch size={19} />
-              <span><strong>{catalogInfo?.partCount ?? '585'}</strong> ricambi indicizzati</span>
+              <span><strong>{activeView === 'chat' && catalogInfo ? catalogInfo.partCount : indexedPartCount}</strong> ricambi indicizzati</span>
             </div>
           </div>
 
