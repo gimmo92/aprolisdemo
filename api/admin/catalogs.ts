@@ -8,6 +8,11 @@ const catalogSchema = z.object({
   fileSize: z.number().int().positive().max(250 * 1024 * 1024),
 })
 
+const approvalSchema = z.object({
+  action: z.literal('approve'),
+  catalogId: z.string().uuid(),
+})
+
 function filenameHints(filename: string) {
   const readable = filename
     .replace(/\.pdf$/i, '')
@@ -93,6 +98,48 @@ export default async function handler(
     return response.status(201).json({ catalogId: catalog.id, jobId: job?.id })
   }
 
+  if (request.method === 'PATCH') {
+    const parsed = approvalSchema.safeParse(request.body)
+    if (!parsed.success) {
+      return response.status(400).json({ error: 'Richiesta di approvazione non valida.' })
+    }
+    const { data: catalog, error: catalogError } = await supabase
+      .from('catalogs')
+      .select('status, part_count, metadata')
+      .eq('id', parsed.data.catalogId)
+      .single()
+    if (catalogError || !catalog) {
+      return response.status(404).json({ error: 'Catalogo non trovato.' })
+    }
+    if (catalog.status === 'ready') {
+      return response.status(200).json({ approved: true })
+    }
+    if (catalog.status !== 'needs_review' || catalog.part_count < 1) {
+      return response.status(409).json({
+        error: 'Il catalogo non è approvabile nello stato corrente.',
+      })
+    }
+    const metadata =
+      catalog.metadata && typeof catalog.metadata === 'object'
+        ? catalog.metadata
+        : {}
+    const { error } = await supabase
+      .from('catalogs')
+      .update({
+        status: 'ready',
+        metadata: {
+          ...metadata,
+          review: {
+            approvedAt: new Date().toISOString(),
+            approvedBy: admin.user.id,
+          },
+        },
+      })
+      .eq('id', parsed.data.catalogId)
+    if (error) return response.status(500).json({ error: error.message })
+    return response.status(200).json({ approved: true })
+  }
+
   if (request.method === 'DELETE') {
     const catalogId =
       typeof request.query.catalogId === 'string' ? request.query.catalogId : ''
@@ -112,7 +159,7 @@ export default async function handler(
     return response.status(200).json({ deleted: true })
   }
 
-  response.setHeader('Allow', 'GET, POST, DELETE')
+  response.setHeader('Allow', 'GET, POST, PATCH, DELETE')
   return response.status(405).json({ error: 'Metodo non consentito.' })
 }
 
