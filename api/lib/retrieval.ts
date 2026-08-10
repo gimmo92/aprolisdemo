@@ -165,17 +165,79 @@ export function searchParts(serial: string, query: string, limit = 8) {
     .map(({ part }) => part)
 }
 
+export type BundledPart = IndexedPart & {
+  catalogId: string
+  catalogName: string
+  documentName: string
+  documentPages: number
+  pdfAvailable: boolean
+}
+
+function annotateCatalogParts(catalog: IndexedCatalog): BundledPart[] {
+  return catalog.parts.map((part) => ({
+    ...part,
+    catalogId: catalog.id,
+    catalogName: `${catalog.brand} · ${catalog.model}`,
+    documentName: catalog.documentName,
+    documentPages: catalog.documentPages,
+    pdfAvailable: false,
+  }))
+}
+
 export function getAllParts(serial: string) {
   const catalog = findCatalog(serial)
   if (!catalog) return undefined
   return {
     catalog: getPublicCatalog(serial)!,
-    parts: [...catalog.parts].sort(
+    parts: annotateCatalogParts(catalog).sort(
       (left, right) =>
         left.page - right.page ||
         left.item.localeCompare(right.item, 'it', { numeric: true }) ||
         left.code.localeCompare(right.code),
     ),
+  }
+}
+
+/** All bundled demo catalogs (used when merging with Supabase-ready indexes). */
+export function getAllBundledParts(excludeDocumentNames: Iterable<string> = []) {
+  const excluded = new Set(
+    [...excludeDocumentNames].map((name) => name.trim().toLocaleLowerCase('it')),
+  )
+  const selected = catalogs.filter(
+    (catalog) => !excluded.has(catalog.documentName.trim().toLocaleLowerCase('it')),
+  )
+  if (!selected.length) return undefined
+
+  const parts = selected.flatMap(annotateCatalogParts).sort(
+    (left, right) =>
+      left.catalogName.localeCompare(right.catalogName, 'it') ||
+      left.page - right.page ||
+      left.item.localeCompare(right.item, 'it', { numeric: true }) ||
+      left.code.localeCompare(right.code),
+  )
+
+  return {
+    catalog: {
+      id: 'bundled-local',
+      brand: 'Cataloghi locali',
+      model: `${selected.length} cataloghi`,
+      version: 'Indice demo incluso nel deploy',
+      customer: '',
+      orderReference: '',
+      serialNumbers: selected.flatMap((catalog) => catalog.serialNumbers),
+      documentName: `${selected.length} PDF`,
+      documentPages: selected.reduce(
+        (total, catalog) => total + catalog.documentPages,
+        0,
+      ),
+      partCount: parts.length,
+    } satisfies PublicCatalog,
+    parts,
+    catalogs: selected.map((catalog) => ({
+      id: catalog.id,
+      documentName: catalog.documentName,
+      partCount: catalog.partCount,
+    })),
   }
 }
 

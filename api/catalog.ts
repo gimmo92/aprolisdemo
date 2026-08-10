@@ -1,5 +1,9 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
-import { getIndexStats, getPublicCatalog } from './lib/retrieval.js'
+import {
+  getAllBundledParts,
+  getIndexStats,
+  getPublicCatalog,
+} from './lib/retrieval.js'
 import { findSupabaseCatalog } from './lib/supabase-retrieval.js'
 import { getSupabaseAdmin, isSupabaseConfigured } from './lib/supabase.js'
 
@@ -18,18 +22,32 @@ export default async function handler(
   if (!serial) {
     if (isSupabaseConfigured()) {
       const supabase = getSupabaseAdmin()
-      const [{ count: catalogs }, { count: parts }, { data: serials }] =
-        await Promise.all([
-          supabase.from('catalogs').select('*', { count: 'exact', head: true }),
-          supabase.from('parts').select('*', { count: 'exact', head: true }),
-          supabase.from('catalog_serials').select('serial_number'),
-        ])
+      const [{ data: readyCatalogs }, { data: serials }] = await Promise.all([
+        supabase
+          .from('catalogs')
+          .select('id, original_filename, part_count')
+          .eq('status', 'ready'),
+        supabase.from('catalog_serials').select('serial_number'),
+      ])
+      const bundled = getAllBundledParts(
+        (readyCatalogs || []).map((row) => row.original_filename),
+      )
+      const readyParts = (readyCatalogs || []).reduce(
+        (total, catalog) => total + (catalog.part_count || 0),
+        0,
+      )
       return response.status(200).json({
         stats: {
-          catalogs: catalogs || 0,
-          parts: parts || 0,
-          serialNumbers: (serials || []).map((row) => row.serial_number),
-          source: 'supabase',
+          catalogs:
+            (readyCatalogs?.length || 0) + (bundled?.catalogs.length || 0),
+          parts: readyParts + (bundled?.parts.length || 0),
+          serialNumbers: [
+            ...new Set([
+              ...(serials || []).map((row) => row.serial_number),
+              ...(bundled?.catalog.serialNumbers || []),
+            ]),
+          ],
+          source: 'supabase+bundled',
         },
       })
     }

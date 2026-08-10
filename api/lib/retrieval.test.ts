@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   findCatalog,
+  getAllBundledParts,
+  getAllParts,
   getIndexStats,
   getPublicCatalog,
   searchParts,
@@ -42,5 +44,24 @@ describe('catalog retrieval', () => {
     const stats = getIndexStats()
     expect(stats.catalogs).toBe(1)
     expect(stats.parts).toBeGreaterThanOrEqual(585)
+  })
+
+  it('exposes the bundled AR197350 parts for 13510073', () => {
+    const result = getAllParts('13510073')
+    expect(result?.parts.length).toBeGreaterThanOrEqual(585)
+    expect(result?.parts[0]).toMatchObject({
+      catalogId: 'charlatte-t135-ar197350',
+      catalogName: 'Charlatte Manutention · T135',
+      documentName: 't135_movincar_avio_global_services_ar197350_REV00.pdf',
+    })
+  })
+
+  it('keeps bundled catalogs when they are not already in Supabase', () => {
+    const all = getAllBundledParts()
+    expect(all?.parts.length).toBeGreaterThanOrEqual(585)
+    const excluded = getAllBundledParts([
+      't135_movincar_avio_global_services_ar197350_REV00.pdf',
+    ])
+    expect(excluded).toBeUndefined()
   })
 })

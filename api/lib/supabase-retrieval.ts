@@ -130,12 +130,20 @@ export async function getAllSupabaseParts(serial: string) {
     .order('item')
 
   if (error) throw error
+  const catalogName = `${match.catalog.brand} · ${match.catalog.model}`
   return {
     catalog: {
       ...match.catalog,
       partCount: data?.length || match.catalog.partCount,
     },
-    parts: ((data || []) as PartRow[]).map(mapPart),
+    parts: ((data || []) as PartRow[]).map((row) => ({
+      ...mapPart(row),
+      catalogId: match.catalog.id,
+      catalogName,
+      documentName: match.catalog.documentName,
+      documentPages: match.catalog.documentPages,
+      pdfAvailable: Boolean(match.storagePath),
+    })),
     storagePath: match.storagePath,
   }
 }
