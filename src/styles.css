@@ -610,7 +610,7 @@ button {
 
 .catalog-filters {
   display: grid;
-  grid-template-columns: minmax(230px, 1.5fr) minmax(130px, 0.8fr) minmax(120px, 0.65fr) 105px auto;
+  grid-template-columns: minmax(220px, 1.4fr) minmax(145px, 0.9fr) minmax(125px, 0.75fr) minmax(110px, 0.6fr) 105px auto;
   align-items: end;
   gap: 9px;
   padding: 13px;
@@ -1376,11 +1376,11 @@ button {
 
 @media (max-width: 1150px) {
   .catalog-filters {
-    grid-template-columns: minmax(220px, 1fr) repeat(3, minmax(105px, 0.55fr));
+    grid-template-columns: minmax(220px, 1fr) repeat(4, minmax(105px, 0.55fr));
   }
 
   .clear-filters {
-    grid-column: 4;
+    grid-column: 5;
     width: max-content;
     justify-self: end;
   }
@@ -1419,10 +1419,6 @@ button {
 
   .catalog-filters {
     grid-template-columns: minmax(210px, 1fr) 1fr 1fr;
-  }
-
-  .page-filter {
-    grid-column: 1;
   }
 
   .clear-filters {
