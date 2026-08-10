@@ -29,6 +29,7 @@ type AdminCatalog = {
     id: string
     status: string
     progress: number
+    updated_at?: string
     error_message?: string
     report?: {
       deterministicParts?: number
@@ -49,6 +50,16 @@ type AdminCatalog = {
       detectedMetadata?: { missing?: string[] }
     }
   }>
+}
+
+type ApiPayload = {
+  error?: string
+  catalogs?: AdminCatalog[]
+  catalogId?: string
+  jobId?: string
+  status?: string
+  accepted?: number
+  report?: NonNullable<AdminCatalog['ingestion_jobs']>[number]['report']
 }
 
 function statusLabel(status: string) {
@@ -87,6 +98,27 @@ function reportSummary(
     return `Estrazione: ${report.deterministicParts || 0} deterministici + ${report.aiParts} Claude`
   }
   return ''
+}
+
+function isStaleJob(
+  job: NonNullable<AdminCatalog['ingestion_jobs']>[number] | undefined,
+) {
+  if (job?.status !== 'running' || !job.updated_at) return false
+  const updatedAt = Date.parse(job.updated_at)
+  return Number.isFinite(updatedAt) && Date.now() - updatedAt >= 6 * 60 * 1000
+}
+
+async function readApiPayload(response: Response): Promise<ApiPayload> {
+  const text = await response.text()
+  try {
+    return JSON.parse(text) as ApiPayload
+  } catch {
+    return {
+      error: response.ok
+        ? 'Il server ha restituito una risposta non valida.'
+        : `Indicizzazione interrotta dal server (${response.status}). Attendi sei minuti e premi Riprova.`,
+    }
+  }
 }
 
 export function AdminCatalogs() {
@@ -139,7 +171,7 @@ export function AdminCatalogs() {
     setRole(data?.role)
     if (data?.role !== 'admin') return
     const response = await fetch('/api/admin/catalogs', { headers: authHeaders })
-    const payload = await response.json()
+    const payload = await readApiPayload(response)
     if (response.ok) setCatalogs(payload.catalogs || [])
   }, [authHeaders, session])
 
@@ -229,8 +261,10 @@ export function AdminCatalogs() {
           fileSize: file.size,
         }),
       })
-      const created = await createResponse.json()
-      if (!createResponse.ok) throw new Error(created.error)
+      const created = await readApiPayload(createResponse)
+      if (!createResponse.ok || !created.catalogId || !created.jobId) {
+        throw new Error(created.error || 'Catalogo non registrato.')
+      }
 
       setMessage('Indicizzazione in corso…')
       const indexResponse = await fetch('/api/index_catalog', {
@@ -241,8 +275,10 @@ export function AdminCatalogs() {
           jobId: created.jobId,
         }),
       })
-      const indexed = await indexResponse.json()
-      if (!indexResponse.ok) throw new Error(indexed.error)
+      const indexed = await readApiPayload(indexResponse)
+      if (!indexResponse.ok) {
+        throw new Error(indexed.error || 'Indicizzazione non riuscita.')
+      }
       setMessage(
         indexed.status === 'needs_review'
           ? 'Indicizzazione completata: alcune pagine richiedono verifica.'
@@ -265,7 +301,7 @@ export function AdminCatalogs() {
       `/api/admin/catalogs?catalogId=${encodeURIComponent(catalog.id)}`,
       { method: 'DELETE', headers: authHeaders },
     )
-    const payload = await response.json()
+    const payload = await readApiPayload(response)
     setMessage(response.ok ? 'Catalogo eliminato.' : payload.error)
     setBusy(false)
     await refresh()
@@ -273,7 +309,7 @@ export function AdminCatalogs() {
 
   async function retryCatalog(catalog: AdminCatalog) {
     const retryableJob = catalog.ingestion_jobs?.find((job) =>
-      ['failed', 'completed'].includes(job.status),
+      ['failed', 'completed'].includes(job.status) || isStaleJob(job),
     )
     if (!retryableJob || !authHeaders) return
     setBusy(true)
@@ -287,8 +323,10 @@ export function AdminCatalogs() {
           jobId: retryableJob.id,
         }),
       })
-      const payload = await response.json()
-      if (!response.ok) throw new Error(payload.error)
+      const payload = await readApiPayload(response)
+      if (!response.ok) {
+        throw new Error(payload.error || 'Indicizzazione non riuscita.')
+      }
       const detail = reportSummary({
         id: retryableJob.id,
         status: payload.status,
@@ -387,6 +425,7 @@ export function AdminCatalogs() {
         <div className="list-heading"><h3>Cataloghi</h3><button onClick={() => void refresh()}><RefreshCw size={16} /> Aggiorna</button></div>
         {catalogs.map((catalog) => {
           const job = catalog.ingestion_jobs?.at(0)
+          const stale = isStaleJob(job)
           const summary = reportSummary(job)
           const state = ['ready', 'needs_review', 'failed'].includes(catalog.status)
             ? catalog.status
@@ -406,7 +445,7 @@ export function AdminCatalogs() {
               <span className="status-badge">{state === 'ready' && <CheckCircle2 size={14} />}{statusLabel(state)} {job?.progress ? `${job.progress}%` : ''}</span>
               <span>{catalog.part_count || 0} ricambi</span>
               <div className="admin-row-actions">
-                {['failed', 'needs_review'].includes(state) && (
+                {(['failed', 'needs_review'].includes(state) || stale) && (
                   <button className="icon-retry" onClick={() => void retryCatalog(catalog)} disabled={busy} aria-label="Riprova indicizzazione"><RefreshCw size={17} /></button>
                 )}
                 <button className="icon-danger" onClick={() => void removeCatalog(catalog)} disabled={busy} aria-label="Elimina catalogo"><Trash2 size={17} /></button>
