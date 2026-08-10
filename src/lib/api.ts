@@ -117,22 +117,12 @@ export function getIndexedParts(serial?: string) {
   )
 }
 
-export type ExplodedHotspot = {
-  item: string
-  x: number
-  y: number
-  labelX?: number
-  labelY?: number
-  synthetic?: boolean
-}
-
 export type ExplodedPageResponse = {
   catalog: CatalogInfo
   page: number
   assemblyTitle: string
   assemblyCode: string
-  image: string
-  hotspots: ExplodedHotspot[]
+  pdfUrl: string
   parts: CatalogPart[]
 }
 

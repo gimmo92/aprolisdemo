@@ -5,7 +5,7 @@ import {
   LoaderCircle,
   PackageOpen,
 } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   ApiError,
   getExplodedPage,
@@ -13,6 +13,7 @@ import {
   type CatalogPart,
   type ExplodedPageResponse,
 } from '../lib/api'
+import { renderExplodedPage, type Hotspot } from '../lib/pdfHotspots'
 
 type AssemblyGroup = {
   key: string
@@ -26,11 +27,13 @@ type AssemblyGroup = {
 }
 
 export default function ExplodedView() {
+  const canvasRef = useRef<HTMLCanvasElement>(null)
   const [parts, setParts] = useState<CatalogPart[]>([])
   const [catalogFilter, setCatalogFilter] = useState('')
   const [selectedKey, setSelectedKey] = useState('')
   const [selectedItem, setSelectedItem] = useState('')
-  const [esploso, setEsploso] = useState<ExplodedPageResponse>()
+  const [pageMeta, setPageMeta] = useState<ExplodedPageResponse>()
+  const [hotspots, setHotspots] = useState<Hotspot[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [isPageLoading, setIsPageLoading] = useState(false)
   const [error, setError] = useState('')
@@ -119,33 +122,65 @@ export default function ExplodedView() {
 
   useEffect(() => {
     if (!selectedAssembly) {
-      setEsploso(undefined)
+      setPageMeta(undefined)
+      setHotspots([])
       setSelectedItem('')
-      return
-    }
-    if (!selectedAssembly.pdfAvailable) {
-      setEsploso(undefined)
-      setSelectedItem(selectedAssembly.parts[0]?.item || '')
       return
     }
 
     let active = true
     setIsPageLoading(true)
     setError('')
-    getExplodedPage(selectedAssembly.catalogId, selectedAssembly.page)
-      .then((result) => {
+    setHotspots([])
+    setPageMeta(undefined)
+
+    const load = async () => {
+      if (!selectedAssembly.pdfAvailable) {
         if (!active) return
-        setEsploso(result)
-        setSelectedItem(result.parts[0]?.item || result.hotspots[0]?.item || '')
-      })
+        setSelectedItem(selectedAssembly.parts[0]?.item || '')
+        setHotspots(
+          selectedAssembly.parts.map((part, index) => ({
+            item: part.item || String(index + 1),
+            x: 0.1,
+            y: 0.15 + index * 0.05,
+            synthetic: true,
+          })),
+        )
+        return
+      }
+
+      const meta = await getExplodedPage(
+        selectedAssembly.catalogId,
+        selectedAssembly.page,
+      )
+      if (!active) return
+      setPageMeta(meta)
+      setSelectedItem(meta.parts[0]?.item || '')
+
+      const canvas = canvasRef.current
+      if (!canvas) return
+      const nextHotspots = await renderExplodedPage(
+        meta.pdfUrl,
+        meta.page,
+        meta.parts.map((part) => part.item),
+        canvas,
+      )
+      if (!active) return
+      setHotspots(nextHotspots)
+    }
+
+    void load()
       .catch((requestError: unknown) => {
         if (!active) return
-        setEsploso(undefined)
+        setPageMeta(undefined)
+        setHotspots([])
         setSelectedItem(selectedAssembly.parts[0]?.item || '')
         setError(
           requestError instanceof ApiError
             ? requestError.message
-            : 'Esploso non disponibile per questa pagina.',
+            : requestError instanceof Error
+              ? requestError.message
+              : 'Esploso non disponibile per questa pagina.',
         )
       })
       .finally(() => {
@@ -157,14 +192,14 @@ export default function ExplodedView() {
     }
   }, [selectedAssembly])
 
-  const activeParts = esploso?.parts || selectedAssembly?.parts || []
+  const activeParts = pageMeta?.parts || selectedAssembly?.parts || []
   const selectedPart =
     activeParts.find((part) => part.item === selectedItem) || activeParts[0]
-
   const selectedIndex = Math.max(
     0,
     visibleAssemblies.findIndex((assembly) => assembly.key === selectedKey),
   )
+  const showCanvas = Boolean(selectedAssembly?.pdfAvailable && !error)
 
   if (isLoading) {
     return (
@@ -260,31 +295,34 @@ export default function ExplodedView() {
           </div>
 
           <div className="exploded-canvas-wrap">
-            {isPageLoading ? (
+            {isPageLoading && (
               <div className="exploded-canvas-state">
                 <LoaderCircle className="spin" size={24} />
                 <span>Rendering tavola…</span>
               </div>
-            ) : esploso?.image ? (
-              <div className="exploded-canvas">
-                <img src={esploso.image} alt={`Esploso pagina ${esploso.page}`} />
-                {esploso.hotspots.map((hotspot) => (
-                  <button
-                    key={`${hotspot.item}-${hotspot.x}-${hotspot.y}`}
-                    type="button"
-                    className={`exploded-hotspot ${
-                      selectedItem === hotspot.item ? 'active' : ''
-                    } ${hotspot.synthetic ? 'synthetic' : ''}`}
-                    style={{ left: `${hotspot.x * 100}%`, top: `${hotspot.y * 100}%` }}
-                    onClick={() => setSelectedItem(hotspot.item)}
-                    aria-label={`Ricambio posizione ${hotspot.item}`}
-                    title={`Pos. ${hotspot.item}`}
-                  >
-                    {hotspot.item}
-                  </button>
-                ))}
-              </div>
-            ) : (
+            )}
+            <div
+              className="exploded-canvas"
+              hidden={isPageLoading || !showCanvas}
+            >
+              <canvas ref={canvasRef} />
+              {hotspots.map((hotspot) => (
+                <button
+                  key={`${hotspot.item}-${hotspot.x}-${hotspot.y}`}
+                  type="button"
+                  className={`exploded-hotspot ${
+                    selectedItem === hotspot.item ? 'active' : ''
+                  } ${hotspot.synthetic ? 'synthetic' : ''}`}
+                  style={{ left: `${hotspot.x * 100}%`, top: `${hotspot.y * 100}%` }}
+                  onClick={() => setSelectedItem(hotspot.item)}
+                  aria-label={`Ricambio posizione ${hotspot.item}`}
+                  title={`Pos. ${hotspot.item}`}
+                >
+                  {hotspot.item}
+                </button>
+              ))}
+            </div>
+            {!isPageLoading && !showCanvas && (
               <div className="exploded-canvas exploded-canvas-fallback">
                 <div className="exploded-fallback-grid">
                   {(selectedAssembly?.parts || []).map((part) => (

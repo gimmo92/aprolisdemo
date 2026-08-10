@@ -1884,7 +1884,7 @@ button {
   min-height: 520px;
 }
 
-.exploded-canvas img {
+.exploded-canvas canvas {
   display: block;
   width: 100%;
   height: auto;
