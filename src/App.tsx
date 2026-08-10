@@ -386,7 +386,7 @@ function App() {
             </>
           ) : activeView === 'catalog' ? (
             <div className="catalog-scroll">
-              <PartsCatalog serial={selectedSerial} />
+              <PartsCatalog />
             </div>
           ) : (
             <div className="catalog-scroll admin-scroll">

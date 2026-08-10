@@ -153,8 +153,11 @@ export default function PartsCatalog({ serial }: Props) {
           <span className="catalog-kicker">Indice documentale</span>
           <h2>Tutti i ricambi indicizzati</h2>
           <p>
-            {catalog?.version} · {catalog?.orderReference} · {catalog?.documentPages}{' '}
-            pagine
+            {[catalog?.version, catalog?.orderReference, catalog?.documentPages
+              ? `${catalog.documentPages} pagine`
+              : null]
+              .filter(Boolean)
+              .join(' · ')}
           </p>
         </div>
         <div className="catalog-total">
