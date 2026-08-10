@@ -1014,18 +1014,42 @@ def _anthropic_parts_batch(
             "Anthropic non ha invocato record_parts una sola volta.",
         )
     result = tool_inputs[0]
-    if not isinstance(result, dict) or not isinstance(result.get("parts"), list):
+    for envelope_key in ("result", "data", "output"):
+        nested = result.get(envelope_key) if isinstance(result, dict) else None
+        if isinstance(nested, dict):
+            result = nested
+            break
+    row_aliases = ("parts", "spare_parts", "spareParts", "rows", "items")
+    rows = next(
+        (
+            result.get(key)
+            for key in row_aliases
+            if isinstance(result.get(key), list)
+        ),
+        None,
+    )
+    if not isinstance(result, dict) or not isinstance(rows, list):
         raise IndexingError(
             502,
             "ANTHROPIC_INVALID_JSON",
             "La risposta Anthropic non rispetta lo schema richiesto.",
+            {
+                "keys": sorted(result) if isinstance(result, dict) else [],
+                "valueTypes": (
+                    {
+                        key: type(value).__name__
+                        for key, value in result.items()
+                    }
+                    if isinstance(result, dict)
+                    else {}
+                ),
+            },
         )
     confidence_raw = result.get("confidence", 0.75)
     try:
         confidence = float(confidence_raw)
     except (TypeError, ValueError):
         confidence = 0.75
-    rows = result.get("parts")
     if (
         isinstance(confidence_raw, bool)
         or not 0 <= confidence <= 1
@@ -1437,7 +1461,7 @@ def _extract(
     resolved_before = completed_before - previous_unresolved
     max_ai_pages = _env_int("INDEX_MAX_AI_PAGES", 80, 0, 500)
     eligible_ai_indexes = suspect_indexes[:max_ai_pages]
-    pages_per_run = _env_int("INDEX_AI_PAGES_PER_RUN", 3, 1, 8)
+    pages_per_run = _env_int("INDEX_AI_PAGES_PER_RUN", 1, 1, 8)
     pending_ai_indexes = [
         index for index in eligible_ai_indexes if index not in completed_before
     ]
@@ -1470,7 +1494,7 @@ def _extract(
         )
         selected_ai_indexes = []
 
-    ai_batch_pages = _env_int("INDEX_AI_BATCH_PAGES", 3, 1, 8)
+    ai_batch_pages = _env_int("INDEX_AI_BATCH_PAGES", 1, 1, 8)
     ai_concurrency = _env_int("INDEX_AI_CONCURRENCY", 2, 1, 4)
     completed_this_run: set[int] = set()
     page_batches = [
