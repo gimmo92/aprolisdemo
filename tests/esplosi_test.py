@@ -1,14 +1,17 @@
+import sys
+from pathlib import Path
+
 import pymupdf as fitz
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'api'))
 from esplosi import _extract_hotspots, _fallback_hotspots, _normalize_item
 
 
 def test_extract_hotspots_prefers_drawing_area() -> None:
     document = fitz.open()
     page = document.new_page(width=600, height=800)
-    # Drawing-area callouts
     page.insert_text((80, 120), "1", fontsize=14)
     page.insert_text((140, 180), "2", fontsize=14)
-    # Dense table-like zone near bottom
     page.insert_text((80, 700), "1", fontsize=10)
     page.insert_text((200, 700), "CODE", fontsize=10)
     hotspots = _extract_hotspots(page, {"1", "2"})
