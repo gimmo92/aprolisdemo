@@ -28,6 +28,8 @@ type AdminCatalog = {
   status: string
   part_count: number
   created_at: string
+  source?: 'supabase' | 'bundled'
+  serial_numbers?: string[]
   ingestion_jobs?: Array<{
     id: string
     status: string
@@ -457,6 +459,13 @@ export function AdminCatalogs() {
           <strong>{file?.name || 'Seleziona o trascina un PDF'}</strong>
           <span>Massimo 250 MB</span>
         </label>
+        <div className="auto-detect-note">
+          <CheckCircle2 size={18} />
+          <div>
+            <strong>Riconoscimento automatico</strong>
+            <span>Brand, modello, versione, revisione, cliente, ordine e matricole saranno estratti dal PDF.</span>
+          </div>
+        </div>
         {busy && progress > 0 && <div className="upload-progress"><span style={{ width: `${progress}%` }} /></div>}
         <button className="primary-button" disabled={busy || !file}>
           {busy ? <LoaderCircle className="spin" size={18} /> : <FileUp size={18} />}
@@ -467,14 +476,24 @@ export function AdminCatalogs() {
       <div className="catalog-admin-list">
         <div className="list-heading"><h3>Cataloghi</h3><button onClick={() => void refresh()}><RefreshCw size={16} /> Aggiorna</button></div>
         {catalogs.map((catalog) => {
+          const bundled = catalog.source === 'bundled' || catalog.id.startsWith('bundled:')
           const job = catalog.ingestion_jobs?.at(0)
-          const stale = isStaleJob(job)
-          const summary = reportSummary(job)
-          const state = ['ready', 'needs_review', 'failed'].includes(catalog.status)
-            ? catalog.status
-            : job?.status || catalog.status
+          const stale = !bundled && isStaleJob(job)
+          const summary = bundled
+            ? `Catalogo demo incluso nel deploy${
+                catalog.serial_numbers?.length
+                  ? ` · matricole ${catalog.serial_numbers.join(', ')}`
+                  : ''
+              }`
+            : reportSummary(job)
+          const state = bundled
+            ? 'ready'
+            : ['ready', 'needs_review', 'failed'].includes(catalog.status)
+              ? catalog.status
+              : job?.status || catalog.status
           const reviewPage = job?.report?.unresolvedPages?.[0]
           const retryableReview =
+            !bundled &&
             state === 'needs_review' &&
             Boolean(
               job?.report?.remainingAiPages?.length ||
@@ -486,25 +505,27 @@ export function AdminCatalogs() {
               <div className="admin-catalog-main">
                 <strong>{catalog.brand} · {catalog.model}</strong>
                 <span>{catalog.original_filename}</span>
-                {job?.error_message ? (
+                {job?.error_message && !bundled ? (
                   <small className="index-error">{job.error_message}</small>
                 ) : (
                   summary && <small className="review-summary">{summary}</small>
                 )}
               </div>
-              <span className="status-badge">{state === 'ready' && <CheckCircle2 size={14} />}{statusLabel(state)} {job?.progress ? `${job.progress}%` : ''}</span>
+              <span className="status-badge">{state === 'ready' && <CheckCircle2 size={14} />}{statusLabel(state)} {bundled ? '' : job?.progress ? `${job.progress}%` : ''}</span>
               <span>{catalog.part_count || 0} ricambi</span>
               <div className="admin-row-actions">
-                {(state === 'failed' || retryableReview || stale) && (
+                {!bundled && (state === 'failed' || retryableReview || stale) && (
                   <button className="icon-retry" onClick={() => void retryCatalog(catalog)} disabled={busy} aria-label="Riprova indicizzazione"><RefreshCw size={17} /></button>
                 )}
-                {state === 'needs_review' && reviewPage && (
+                {!bundled && state === 'needs_review' && reviewPage && (
                   <button className="icon-review" onClick={() => void openReviewPage(catalog, reviewPage)} disabled={busy} aria-label={`Apri pagina ${reviewPage}`} title={`Apri pagina ${reviewPage}`}><FileSearch size={17} /></button>
                 )}
-                {state === 'needs_review' && (
+                {!bundled && state === 'needs_review' && (
                   <button className="icon-approve" onClick={() => void approveCatalog(catalog)} disabled={busy} aria-label="Approva catalogo" title="Approva catalogo"><BadgeCheck size={17} /></button>
                 )}
-                <button className="icon-danger" onClick={() => void removeCatalog(catalog)} disabled={busy} aria-label="Elimina catalogo"><Trash2 size={17} /></button>
+                {!bundled && (
+                  <button className="icon-danger" onClick={() => void removeCatalog(catalog)} disabled={busy} aria-label="Elimina catalogo"><Trash2 size={17} /></button>
+                )}
               </div>
             </article>
           )

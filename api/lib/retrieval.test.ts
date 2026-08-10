@@ -5,6 +5,7 @@ import {
   getAllParts,
   getIndexStats,
   getPublicCatalog,
+  listBundledCatalogs,
   searchParts,
 } from './retrieval.js'
 
@@ -63,5 +64,28 @@ describe('catalog retrieval', () => {
       't135_movincar_avio_global_services_ar197350_REV00.pdf',
     ])
     expect(excluded).toBeUndefined()
+  })
+
+  it('lists the default bundled catalog for the admin UI', () => {
+    const listed = listBundledCatalogs()
+    expect(listed).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'bundled:charlatte-t135-ar197350',
+          brand: 'Charlatte Manutention',
+          model: 'T135',
+          status: 'ready',
+          source: 'bundled',
+          original_filename:
+            't135_movincar_avio_global_services_ar197350_REV00.pdf',
+        }),
+      ]),
+    )
+    expect(listed[0]?.part_count).toBeGreaterThanOrEqual(585)
+    expect(
+      listBundledCatalogs([
+        't135_movincar_avio_global_services_ar197350_REV00.pdf',
+      ]),
+    ).toEqual([])
   })
 })

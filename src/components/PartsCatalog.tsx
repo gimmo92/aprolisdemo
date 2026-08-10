@@ -155,10 +155,14 @@ export default function PartsCatalog({ serial }: Props) {
           <p>
             {[catalog?.version, catalog?.orderReference, catalog?.documentPages
               ? `${catalog.documentPages} pagine`
-              : null, `${parts.length} ricambi`]
+              : null]
               .filter(Boolean)
               .join(' · ')}
           </p>
+        </div>
+        <div className="catalog-total">
+          <strong>{parts.length}</strong>
+          <span>ricambi</span>
         </div>
       </div>
 

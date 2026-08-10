@@ -198,6 +198,53 @@ export function getAllParts(serial: string) {
   }
 }
 
+/** Bundled catalogs shaped for the admin catalog list. */
+export function listBundledCatalogs(excludeDocumentNames: Iterable<string> = []) {
+  const excluded = new Set(
+    [...excludeDocumentNames].map((name) => name.trim().toLocaleLowerCase('it')),
+  )
+  return catalogs
+    .filter(
+      (catalog) =>
+        !excluded.has(catalog.documentName.trim().toLocaleLowerCase('it')),
+    )
+    .map((catalog) => ({
+      id: `bundled:${catalog.id}`,
+      brand: catalog.brand,
+      model: catalog.model,
+      version: catalog.version,
+      original_filename: catalog.documentName,
+      storage_path: '',
+      status: 'ready',
+      page_count: catalog.documentPages,
+      part_count: catalog.partCount,
+      revision: catalog.orderReference || null,
+      created_at: '',
+      updated_at: '',
+      source: 'bundled' as const,
+      serial_numbers: catalog.serialNumbers,
+      ingestion_jobs: [
+        {
+          id: `bundled-job:${catalog.id}`,
+          status: 'completed',
+          progress: 100,
+          error_message: undefined,
+          report: {
+            deterministicParts: catalog.partCount,
+            aiParts: 0,
+            unresolvedPages: [],
+            remainingAiPages: [],
+            detectedMetadata: {
+              missing: [],
+            },
+          },
+          created_at: '',
+          updated_at: '',
+        },
+      ],
+    }))
+}
+
 /** All bundled demo catalogs (used when merging with Supabase-ready indexes). */
 export function getAllBundledParts(excludeDocumentNames: Iterable<string> = []) {
   const excluded = new Set(

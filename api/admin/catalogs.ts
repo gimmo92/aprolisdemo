@@ -1,5 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { z } from 'zod'
+import { listBundledCatalogs } from '../lib/retrieval.js'
 import { getSupabaseAdmin, requireAdmin } from '../lib/supabase.js'
 
 const catalogSchema = z.object({
@@ -47,7 +48,17 @@ export default async function handler(
       )
       .order('created_at', { ascending: false })
     if (error) return response.status(500).json({ error: error.message })
-    return response.status(200).json({ catalogs: data || [] })
+    const supabaseCatalogs = (data || []).map((catalog) => ({
+      ...catalog,
+      source: 'supabase' as const,
+    }))
+    const knownDocuments = supabaseCatalogs.map(
+      (catalog) => catalog.original_filename,
+    )
+    const bundledCatalogs = listBundledCatalogs(knownDocuments)
+    return response.status(200).json({
+      catalogs: [...supabaseCatalogs, ...bundledCatalogs],
+    })
   }
 
   if (request.method === 'POST') {
@@ -143,6 +154,11 @@ export default async function handler(
   if (request.method === 'DELETE') {
     const catalogId =
       typeof request.query.catalogId === 'string' ? request.query.catalogId : ''
+    if (catalogId.startsWith('bundled:')) {
+      return response.status(409).json({
+        error: 'Il catalogo demo incluso nel deploy non può essere eliminato.',
+      })
+    }
     if (!z.string().uuid().safeParse(catalogId).success) {
       return response.status(400).json({ error: 'catalogId non valido.' })
     }

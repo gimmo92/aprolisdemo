@@ -326,6 +326,34 @@ button {
   font-size: 11px;
 }
 
+.catalog-total {
+  min-width: 92px;
+  padding: 10px 14px;
+  text-align: right;
+  background: var(--blue-50);
+  border: 1px solid #d8e8f8;
+  border-radius: 12px;
+}
+
+.catalog-total strong,
+.catalog-total span {
+  display: block;
+}
+
+.catalog-total strong {
+  color: var(--blue-800);
+  font: 800 22px 'Manrope', sans-serif;
+}
+
+.catalog-total span {
+  margin-top: 1px;
+  color: #73889e;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
 .catalog-filters {
   display: grid;
   grid-template-columns: minmax(220px, 1.4fr) minmax(145px, 0.9fr) minmax(125px, 0.75fr) minmax(110px, 0.6fr) 105px auto;
@@ -1247,6 +1275,10 @@ button {
     font-size: 20px;
   }
 
+  .catalog-total {
+    min-width: 74px;
+  }
+
   .catalog-filters {
     grid-template-columns: 1fr 1fr;
   }
@@ -1508,6 +1540,33 @@ button {
   overflow: hidden;
   background: #e2e8f0;
   border-radius: 10px;
+}
+
+.auto-detect-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 18px;
+  padding: 13px 14px;
+  color: #1e40af;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 10px;
+}
+
+.auto-detect-note > svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.auto-detect-note div {
+  display: grid;
+  gap: 2px;
+}
+
+.auto-detect-note span {
+  color: #475569;
+  font-size: 12px;
 }
 
 .upload-progress span {
