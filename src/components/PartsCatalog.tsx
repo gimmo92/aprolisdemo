@@ -36,6 +36,7 @@ export default function PartsCatalog({ serial }: Props) {
   const [catalog, setCatalog] = useState<CatalogInfo>()
   const [categories, setCategories] = useState<string[]>([])
   const [query, setQuery] = useState('')
+  const [machine, setMachine] = useState('')
   const [category, setCategory] = useState('')
   const [sourceType, setSourceType] = useState('')
   const [pdfPage, setPdfPage] = useState('')
@@ -72,6 +73,13 @@ export default function PartsCatalog({ serial }: Props) {
     }
   }, [serial])
 
+  const machines = useMemo(
+    () =>
+      [...new Set(parts.map((part) => part.catalogName).filter(Boolean) as string[])]
+        .sort((a, b) => a.localeCompare(b, 'it')),
+    [parts],
+  )
+
   const filteredParts = useMemo(() => {
     const terms = normalize(query).split(' ').filter(Boolean)
     const requestedPage = Number.parseInt(pdfPage, 10)
@@ -84,6 +92,7 @@ export default function PartsCatalog({ serial }: Props) {
           part.originalDescription,
           part.item,
           part.category,
+          part.catalogName,
           part.assemblyCode,
           part.assemblyTitle,
           part.page,
@@ -91,16 +100,17 @@ export default function PartsCatalog({ serial }: Props) {
       )
       return (
         terms.every((term) => searchable.includes(term)) &&
+        (!machine || part.catalogName === machine) &&
         (!category || part.category === category) &&
         (!sourceType || part.sourceType === sourceType) &&
         (!pdfPage || part.page === requestedPage)
       )
     })
-  }, [category, parts, pdfPage, query, sourceType])
+  }, [category, machine, parts, pdfPage, query, sourceType])
 
   useEffect(() => {
     setCurrentPage(1)
-  }, [query, category, sourceType, pdfPage])
+  }, [query, machine, category, sourceType, pdfPage])
 
   const totalPages = Math.max(1, Math.ceil(filteredParts.length / PAGE_SIZE))
   const visibleParts = filteredParts.slice(
@@ -110,6 +120,7 @@ export default function PartsCatalog({ serial }: Props) {
 
   const resetFilters = () => {
     setQuery('')
+    setMachine('')
     setCategory('')
     setSourceType('')
     setPdfPage('')
@@ -160,6 +171,17 @@ export default function PartsCatalog({ serial }: Props) {
             onChange={(event) => setQuery(event.target.value)}
             placeholder="Cerca codice, descrizione o posizione"
           />
+        </label>
+        <label>
+          <span>Macchina</span>
+          <select value={machine} onChange={(event) => setMachine(event.target.value)}>
+            <option value="">Tutte</option>
+            {machines.map((value) => (
+              <option key={value} value={value}>
+                {value}
+              </option>
+            ))}
+          </select>
         </label>
         <label>
           <span>Categoria</span>
