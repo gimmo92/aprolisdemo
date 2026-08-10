@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { startTransition, useCallback, useEffect, useMemo, useState } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import * as tus from 'tus-js-client'
 import {
@@ -371,27 +371,83 @@ export function AdminCatalogs() {
     else window.open(url, '_blank', 'noopener,noreferrer')
   }
 
+  function requestApprove(catalog: AdminCatalog) {
+    // Return from the click handler immediately so INP is not charged for the
+    // confirm dialog + network round-trip + full catalog refresh.
+    window.setTimeout(() => {
+      void approveCatalog(catalog)
+    }, 0)
+  }
+
   async function approveCatalog(catalog: AdminCatalog) {
+    if (!authHeaders) return
     if (
-      !authHeaders ||
       !window.confirm(
         `Confermi di aver verificato ${catalog.original_filename} e di volerlo rendere operativo?`,
       )
-    ) return
-    setBusy(true)
-    const response = await fetch('/api/admin/catalogs', {
-      method: 'PATCH',
-      headers: authHeaders,
-      body: JSON.stringify({ action: 'approve', catalogId: catalog.id }),
+    ) {
+      return
+    }
+
+    startTransition(() => {
+      setCatalogs((current) =>
+        current.map((item) =>
+          item.id === catalog.id
+            ? {
+                ...item,
+                status: 'ready',
+                ingestion_jobs: item.ingestion_jobs?.map((job, index) =>
+                  index === 0
+                    ? {
+                        ...job,
+                        progress: 100,
+                        error_message: undefined,
+                        report: {
+                          ...job.report,
+                          unresolvedPages: [],
+                          remainingAiPages: [],
+                        },
+                      }
+                    : job,
+                ),
+              }
+            : item,
+        ),
+      )
+      setMessage('Catalogo approvato e disponibile nella ricerca.')
     })
-    const payload = await readApiPayload(response)
-    setMessage(
-      response.ok
-        ? 'Catalogo approvato e disponibile nella ricerca.'
-        : payload.error || 'Approvazione non riuscita.',
-    )
-    setBusy(false)
-    await refresh()
+
+    try {
+      const response = await fetch('/api/admin/catalogs', {
+        method: 'PATCH',
+        headers: authHeaders,
+        body: JSON.stringify({ action: 'approve', catalogId: catalog.id }),
+      })
+      const payload = await readApiPayload(response)
+      if (!response.ok) {
+        startTransition(() => {
+          setCatalogs((current) =>
+            current.map((item) =>
+              item.id === catalog.id ? { ...item, status: 'needs_review' } : item,
+            ),
+          )
+          setMessage(payload.error || 'Approvazione non riuscita.')
+        })
+        return
+      }
+      void refresh()
+    } catch (error) {
+      startTransition(() => {
+        setCatalogs((current) =>
+          current.map((item) =>
+            item.id === catalog.id ? { ...item, status: 'needs_review' } : item,
+          ),
+        )
+        setMessage(
+          error instanceof Error ? error.message : 'Approvazione non riuscita.',
+        )
+      })
+    }
   }
 
   if (loading) return <div className="admin-empty"><LoaderCircle className="spin" /></div>
@@ -509,7 +565,7 @@ export function AdminCatalogs() {
                   <button className="icon-review" onClick={() => void openReviewPage(catalog, reviewPage)} disabled={busy} aria-label={`Apri pagina ${reviewPage}`} title={`Apri pagina ${reviewPage}`}><FileSearch size={17} /></button>
                 )}
                 {state === 'needs_review' && (
-                  <button className="icon-approve" onClick={() => void approveCatalog(catalog)} disabled={busy} aria-label="Approva catalogo" title="Approva catalogo"><BadgeCheck size={17} /></button>
+                  <button className="icon-approve" onClick={() => requestApprove(catalog)} disabled={busy} aria-label="Approva catalogo" title="Approva catalogo"><BadgeCheck size={17} /></button>
                 )}
                 <button className="icon-danger" onClick={() => void removeCatalog(catalog)} disabled={busy} aria-label="Elimina catalogo"><Trash2 size={17} /></button>
               </div>
