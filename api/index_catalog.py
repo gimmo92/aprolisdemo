@@ -808,7 +808,7 @@ def _anthropic_catalog_metadata(
     try:
         with urlopen(
             request,
-            timeout=_env_int("INDEX_AI_TIMEOUT_SECONDS", 45, 10, 120),
+            timeout=_env_int("INDEX_AI_TIMEOUT_SECONDS", 180, 10, 240),
         ) as response:
             message = _decode_json(response.read(), "Anthropic metadata")
     except HTTPError as error:
@@ -957,7 +957,7 @@ def _anthropic_parts_batch(
         ],
         "tool_choice": {"type": "tool", "name": "record_parts"},
     }
-    timeout = _env_int("INDEX_AI_TIMEOUT_SECONDS", 45, 10, 120)
+    timeout = _env_int("INDEX_AI_TIMEOUT_SECONDS", 180, 10, 240)
     request = Request(
         "https://api.anthropic.com/v1/messages",
         data=json.dumps(payload, separators=(",", ":")).encode("utf-8"),
@@ -1418,7 +1418,7 @@ def _extract(
     resolved_before = completed_before - previous_unresolved
     max_ai_pages = _env_int("INDEX_MAX_AI_PAGES", 80, 0, 500)
     eligible_ai_indexes = suspect_indexes[:max_ai_pages]
-    pages_per_run = _env_int("INDEX_AI_PAGES_PER_RUN", 6, 1, 8)
+    pages_per_run = _env_int("INDEX_AI_PAGES_PER_RUN", 3, 1, 8)
     pending_ai_indexes = [
         index for index in eligible_ai_indexes if index not in completed_before
     ]
@@ -1451,7 +1451,7 @@ def _extract(
         )
         selected_ai_indexes = []
 
-    ai_batch_pages = _env_int("INDEX_AI_BATCH_PAGES", 6, 1, 8)
+    ai_batch_pages = _env_int("INDEX_AI_BATCH_PAGES", 3, 1, 8)
     ai_concurrency = _env_int("INDEX_AI_CONCURRENCY", 2, 1, 4)
     completed_this_run: set[int] = set()
     page_batches = [
