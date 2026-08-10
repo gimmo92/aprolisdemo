@@ -847,7 +847,42 @@ def _anthropic_catalog_metadata(
     return detected
 
 
-def _ai_schema() -> dict[str, Any]:
+def _ai_schema(*, include_page_number: bool = False) -> dict[str, Any]:
+    part_properties: dict[str, Any] = {
+        "code": {"type": "string", "minLength": 1, "maxLength": 80},
+        "description": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000,
+        },
+        "original_description": {
+            "type": "string",
+            "maxLength": 1000,
+        },
+        "quantity": {
+            "anyOf": [
+                {"type": "number", "minimum": 0},
+                {"type": "null"},
+            ]
+        },
+        "item": {"type": "string", "maxLength": 100},
+        "category": {"type": "string", "maxLength": 300},
+        "assembly_code": {"type": "string", "maxLength": 100},
+        "assembly_title": {"type": "string", "maxLength": 300},
+    }
+    required = [
+        "code",
+        "description",
+        "original_description",
+        "quantity",
+        "item",
+        "category",
+        "assembly_code",
+        "assembly_title",
+    ]
+    if include_page_number:
+        part_properties["page_number"] = {"type": "integer", "minimum": 1}
+        required.append("page_number")
     return {
         "type": "object",
         "additionalProperties": False,
@@ -859,38 +894,8 @@ def _ai_schema() -> dict[str, Any]:
                 "items": {
                     "type": "object",
                     "additionalProperties": False,
-                    "properties": {
-                        "code": {"type": "string", "minLength": 1, "maxLength": 80},
-                        "description": {
-                            "type": "string",
-                            "minLength": 1,
-                            "maxLength": 1000,
-                        },
-                        "original_description": {
-                            "type": "string",
-                            "maxLength": 1000,
-                        },
-                        "quantity": {
-                            "anyOf": [
-                                {"type": "number", "minimum": 0},
-                                {"type": "null"},
-                            ]
-                        },
-                        "item": {"type": "string", "maxLength": 100},
-                        "category": {"type": "string", "maxLength": 300},
-                        "assembly_code": {"type": "string", "maxLength": 100},
-                        "assembly_title": {"type": "string", "maxLength": 300},
-                    },
-                    "required": [
-                        "code",
-                        "description",
-                        "original_description",
-                        "quantity",
-                        "item",
-                        "category",
-                        "assembly_code",
-                        "assembly_title",
-                    ],
+                    "properties": part_properties,
+                    "required": required,
                 },
             },
         },
@@ -898,22 +903,41 @@ def _ai_schema() -> dict[str, Any]:
     }
 
 
-def _anthropic_parts(
-    page_image: bytes,
-    page_number: int,
+def _anthropic_parts_batch(
+    pages: list[tuple[bytes, int]],
     brand: str,
     api_key: str,
     model: str,
 ) -> list[ExtractedPart]:
+    if not pages:
+        return []
+    source_pages = {page_number for _, page_number in pages}
     prompt = (
-        "Extract only spare-part table rows visibly present in this one-page PDF. "
+        "Extract only spare-part table rows visibly present in these page images. "
         "Never infer or complete missing codes. Keep the original description. "
-        f"Brand hint: {brand or 'unknown'}. Source page: {page_number}. "
-        "Return an empty parts array when there is no parts table."
+        f"Brand hint: {brand or 'unknown'}. Source pages: {sorted(source_pages)}. "
+        "Set page_number to the source page shown before each image. "
+        "Return an empty parts array only when none of the images has a parts table."
     )
+    content: list[dict[str, Any]] = []
+    for page_image, page_number in pages:
+        content.extend(
+            [
+                {"type": "text", "text": f"Source page_number: {page_number}"},
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/png",
+                        "data": base64.b64encode(page_image).decode("ascii"),
+                    },
+                },
+            ]
+        )
+    content.append({"type": "text", "text": prompt})
     payload = {
         "model": model,
-        "max_tokens": 4096,
+        "max_tokens": _env_int("INDEX_AI_MAX_TOKENS", 8192, 1024, 16000),
         "system": (
             "You are a strict spare-parts table transcriber. Your response must "
             "conform exactly to the supplied JSON schema."
@@ -921,24 +945,14 @@ def _anthropic_parts(
         "messages": [
             {
                 "role": "user",
-                "content": [
-                    {
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": "image/png",
-                            "data": base64.b64encode(page_image).decode("ascii"),
-                        },
-                    },
-                    {"type": "text", "text": prompt},
-                ],
+                "content": content,
             }
         ],
         "tools": [
             {
                 "name": "record_parts",
-                "description": "Record only spare-part rows visible in the PDF page.",
-                "input_schema": _ai_schema(),
+                "description": "Record spare-part rows and their source page numbers.",
+                "input_schema": _ai_schema(include_page_number=True),
             }
         ],
         "tool_choice": {"type": "tool", "name": "record_parts"},
@@ -1030,6 +1044,7 @@ def _anthropic_parts(
         "category",
         "assembly_code",
         "assembly_title",
+        "page_number",
     }
     parts: list[ExtractedPart] = []
     for index, row in enumerate(rows):
@@ -1043,13 +1058,17 @@ def _anthropic_parts(
         code = row["code"]
         description = row["description"]
         quantity = row["quantity"]
-        string_fields = required - {"quantity"}
+        page_number = row["page_number"]
+        string_fields = required - {"quantity", "page_number"}
         if (
             any(not isinstance(row[field], str) for field in string_fields)
             or not isinstance(code, str)
             or not AI_CODE_RE.fullmatch(code.strip())
             or not isinstance(description, str)
             or not description.strip()
+            or not isinstance(page_number, int)
+            or isinstance(page_number, bool)
+            or page_number not in source_pages
             or (
                 quantity is not None
                 and (
@@ -1082,6 +1101,21 @@ def _anthropic_parts(
             )
         )
     return parts
+
+
+def _anthropic_parts(
+    page_image: bytes,
+    page_number: int,
+    brand: str,
+    api_key: str,
+    model: str,
+) -> list[ExtractedPart]:
+    return _anthropic_parts_batch(
+        [(page_image, page_number)],
+        brand,
+        api_key,
+        model,
+    )
 
 
 def _merge_parts(
@@ -1336,57 +1370,74 @@ def _extract(
         )
         selected_ai_indexes = []
 
-    ai_concurrency = _env_int("INDEX_AI_CONCURRENCY", 3, 1, 6)
+    ai_batch_pages = _env_int("INDEX_AI_BATCH_PAGES", 6, 1, 8)
+    ai_concurrency = _env_int("INDEX_AI_CONCURRENCY", 2, 1, 4)
+    page_batches = [
+        selected_ai_indexes[offset : offset + ai_batch_pages]
+        for offset in range(0, len(selected_ai_indexes), ai_batch_pages)
+    ]
     completed_ai_pages = 0
-    for batch_start in range(0, len(selected_ai_indexes), ai_concurrency):
-        batch_indexes = selected_ai_indexes[
-            batch_start : batch_start + ai_concurrency
+    for wave_start in range(0, len(page_batches), ai_concurrency):
+        wave_batches = page_batches[
+            wave_start : wave_start + ai_concurrency
         ]
         # PyMuPDF rendering stays on the request thread; only independent HTTP
-        # calls run concurrently.
+        # requests run concurrently.
+        wave_indexes = [
+            page_index for batch in wave_batches for page_index in batch
+        ]
         rendered_pages = {
             page_index: _page_image(document, page_index)
-            for page_index in batch_indexes
+            for page_index in wave_indexes
         }
-        with ThreadPoolExecutor(max_workers=len(batch_indexes)) as executor:
+        with ThreadPoolExecutor(max_workers=len(wave_batches)) as executor:
             futures = {
                 executor.submit(
-                    _anthropic_parts,
-                    rendered_pages[page_index],
-                    page_index + 1,
+                    _anthropic_parts_batch,
+                    [
+                        (rendered_pages[page_index], page_index + 1)
+                        for page_index in batch
+                    ],
                     brand,
                     api_key,
                     model,
-                ): page_index
-                for page_index in batch_indexes
+                ): batch
+                for batch in wave_batches
             }
             for future in as_completed(futures):
-                page_index = futures[future]
+                batch = futures[future]
                 try:
                     extracted = future.result()
                     ai_parts.extend(extracted)
-                    # Empty is valid for a non-table page, but cannot resolve a
-                    # page already flagged as a sparse/partial parts table.
-                    if extracted or not page_results[page_index].parts:
-                        unresolved.discard(page_index)
+                    pages_with_parts = {part.page - 1 for part in extracted}
+                    for page_index in batch:
+                        # Empty is valid for a non-table page, but cannot
+                        # resolve an already sparse/partial table.
+                        if (
+                            page_index in pages_with_parts
+                            or not page_results[page_index].parts
+                        ):
+                            unresolved.discard(page_index)
                 except IndexingError as error:
-                    ai_errors.append(
-                        {
-                            "page": page_index + 1,
-                            "code": error.code,
-                            "message": error.message,
-                            "details": error.details,
-                        }
-                    )
+                    for page_index in batch:
+                        ai_errors.append(
+                            {
+                                "page": page_index + 1,
+                                "code": error.code,
+                                "message": error.message,
+                                "details": error.details,
+                            }
+                        )
                 except Exception as error:
-                    ai_errors.append(
-                        {
-                            "page": page_index + 1,
-                            "code": "ANTHROPIC_INTERNAL_ERROR",
-                            "message": type(error).__name__,
-                        }
-                    )
-                completed_ai_pages += 1
+                    for page_index in batch:
+                        ai_errors.append(
+                            {
+                                "page": page_index + 1,
+                                "code": "ANTHROPIC_INTERNAL_ERROR",
+                                "message": type(error).__name__,
+                            }
+                        )
+                completed_ai_pages += len(batch)
         progress = 60 + int(
             (completed_ai_pages / max(len(selected_ai_indexes), 1)) * 15
         )
@@ -1443,6 +1494,7 @@ def _extract(
                 "INDEX_PART_BATCH_SIZE", DEFAULT_BATCH_SIZE, 1, 1000
             ),
             "aiConcurrency": ai_concurrency,
+            "aiBatchPages": ai_batch_pages,
         },
     }
     return parts, report, outcome
