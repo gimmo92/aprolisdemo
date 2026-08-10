@@ -1436,11 +1436,17 @@ def _extract(
         or (bool(result.parts) and result.confidence < MIN_PAGE_CONFIDENCE)
         or "unparsed_table" in result.reasons
         or "sparse_table" in result.reasons
+        or "no_rows" in result.reasons
     ]
-    # Pages with actual low-confidence rows have priority over image-only pages.
+    # Prefer sparse/partial tables, then text-heavy unparsed pages, before
+    # image-only covers. This avoids burning the first AI slot on a blank page
+    # when a catalog (e.g. Fiorentini) has zero deterministic hits.
     suspect_indexes.sort(
         key=lambda index: (
-            not bool(page_results[index].parts),
+            0 if page_results[index].parts else 1,
+            0 if "unparsed_table" in page_results[index].reasons else 1,
+            0 if "no_rows" in page_results[index].reasons else 1,
+            -page_results[index].text_characters,
             page_results[index].confidence,
             index,
         )
@@ -1595,6 +1601,48 @@ def _extract(
                 "Nessun ricambio deterministico e fallback Anthropic non configurato.",
                 ai_errors[0],
             )
+        # Checkpointed AI runs only process a few pages per request. Keep the
+        # job resumable while Claude pages remain instead of failing at 0 rows
+        # after the first empty cover/legend page.
+        if remaining_ai_indexes:
+            report = {
+                "outcome": "needs_review",
+                "adapter": adapter.name,
+                "checksumSha256": checksum,
+                "pages": page_count,
+                "parts": 0,
+                "deterministicParts": len(deterministic_parts),
+                "aiParts": len(ai_parts),
+                "aiPages": [index + 1 for index in sorted(completed_cumulative)],
+                "aiPagesThisRun": [
+                    index + 1 for index in sorted(completed_this_run)
+                ],
+                "completedAiPages": [
+                    index + 1 for index in sorted(completed_cumulative)
+                ],
+                "remainingAiPages": [
+                    index + 1 for index in remaining_ai_indexes
+                ],
+                "suspectPages": [index + 1 for index in suspect_indexes],
+                "unresolvedPages": [index + 1 for index in sorted(unresolved)],
+                "aiErrors": ai_errors,
+                "limits": {
+                    "maxAiPages": max_ai_pages,
+                    "pagesPerRun": pages_per_run,
+                    "maxPdfBytes": _env_int(
+                        "INDEX_MAX_PDF_BYTES",
+                        DEFAULT_MAX_PDF_BYTES,
+                        1,
+                        250 * 1024 * 1024,
+                    ),
+                    "batchSize": _env_int(
+                        "INDEX_PART_BATCH_SIZE", DEFAULT_BATCH_SIZE, 1, 1000
+                    ),
+                    "aiConcurrency": ai_concurrency,
+                    "aiBatchPages": ai_batch_pages,
+                },
+            }
+            return [], report, "needs_review"
         raise IndexingError(
             422,
             "NO_PARTS_EXTRACTED",
