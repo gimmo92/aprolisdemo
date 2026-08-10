@@ -1014,19 +1014,21 @@ def _anthropic_parts_batch(
             "Anthropic non ha invocato record_parts una sola volta.",
         )
     result = tool_inputs[0]
-    if not isinstance(result, dict) or set(result) != {"confidence", "parts"}:
+    if not isinstance(result, dict) or not isinstance(result.get("parts"), list):
         raise IndexingError(
             502,
             "ANTHROPIC_INVALID_JSON",
             "La risposta Anthropic non rispetta lo schema richiesto.",
         )
-    confidence = result.get("confidence")
+    confidence_raw = result.get("confidence", 0.75)
+    try:
+        confidence = float(confidence_raw)
+    except (TypeError, ValueError):
+        confidence = 0.75
     rows = result.get("parts")
     if (
-        not isinstance(confidence, (int, float))
-        or isinstance(confidence, bool)
+        isinstance(confidence_raw, bool)
         or not 0 <= confidence <= 1
-        or not isinstance(rows, list)
         or len(rows) > 500
     ):
         raise IndexingError(
@@ -1035,34 +1037,37 @@ def _anthropic_parts_batch(
             "La risposta Anthropic contiene valori non validi.",
         )
 
-    required = {
-        "code",
-        "description",
-        "original_description",
-        "quantity",
-        "item",
-        "category",
-        "assembly_code",
-        "assembly_title",
-        "page_number",
-    }
     parts: list[ExtractedPart] = []
+    rejected_rows = 0
     for index, row in enumerate(rows):
-        if not isinstance(row, dict) or set(row) != required:
-            raise IndexingError(
-                502,
-                "ANTHROPIC_INVALID_JSON",
-                "Una riga Anthropic non rispetta lo schema richiesto.",
-                {"row": index},
-            )
-        code = row["code"]
-        description = row["description"]
-        quantity = row["quantity"]
-        page_number = row["page_number"]
-        string_fields = required - {"quantity", "page_number"}
+        if not isinstance(row, dict):
+            rejected_rows += 1
+            continue
+        code = row.get("code")
+        description = row.get("description")
+        quantity = row.get("quantity")
+        page_number = (
+            row.get("page_number")
+            or row.get("pageNumber")
+            or row.get("page")
+        )
+        try:
+            if isinstance(page_number, str):
+                page_number = int(page_number.strip())
+            if page_number is None and len(source_pages) == 1:
+                page_number = next(iter(source_pages))
+            if isinstance(quantity, str):
+                if quantity.strip():
+                    quantity = float(quantity.replace(",", "."))
+                    if quantity.is_integer():
+                        quantity = int(quantity)
+                else:
+                    quantity = None
+        except (TypeError, ValueError):
+            rejected_rows += 1
+            continue
         if (
-            any(not isinstance(row[field], str) for field in string_fields)
-            or not isinstance(code, str)
+            not isinstance(code, str)
             or not AI_CODE_RE.fullmatch(code.strip())
             or not isinstance(description, str)
             or not description.strip()
@@ -1078,27 +1083,41 @@ def _anthropic_parts_batch(
                 )
             )
         ):
-            raise IndexingError(
-                502,
-                "ANTHROPIC_INVALID_JSON",
-                "Una riga Anthropic contiene dati non validi.",
-                {"row": index},
-            )
+            rejected_rows += 1
+            continue
         parts.append(
             ExtractedPart(
                 code=code,
                 description=description,
-                original_description=row["original_description"] or description,
+                original_description=str(
+                    row.get("original_description")
+                    or row.get("originalDescription")
+                    or description
+                ),
                 quantity=quantity,
-                item=row["item"],
+                item=str(row.get("item") or row.get("position") or ""),
                 page=page_number,
-                category=row["category"] or "Ricambi",
-                assembly_code=row["assembly_code"],
-                assembly_title=row["assembly_title"],
+                category=str(row.get("category") or "Ricambi"),
+                assembly_code=str(
+                    row.get("assembly_code") or row.get("assemblyCode") or ""
+                ),
+                assembly_title=str(
+                    row.get("assembly_title") or row.get("assemblyTitle") or ""
+                ),
                 source_type="ai",
                 confidence=float(confidence),
-                metadata={"extraction": "anthropic"},
+                metadata={
+                    "extraction": "anthropic",
+                    "sourceRow": index,
+                },
             )
+        )
+    if rows and not parts:
+        raise IndexingError(
+            502,
+            "ANTHROPIC_INVALID_JSON",
+            "Anthropic non ha restituito righe ricambio valide.",
+            {"rejectedRows": rejected_rows},
         )
     return parts
 
