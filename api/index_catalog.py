@@ -1200,6 +1200,64 @@ def _part_row(
     }
 
 
+def _existing_catalog_parts(
+    client: SupabaseREST, catalog_id: str
+) -> list[ExtractedPart]:
+    rows = client.select(
+        "parts",
+        {
+            "catalog_id": f"eq.{catalog_id}",
+            "select": (
+                "code,description,original_description,quantity,item,page_number,"
+                "category,assembly_code,assembly_title,source_type,confidence,metadata"
+            ),
+            "limit": "100000",
+        },
+    )
+    parts: list[ExtractedPart] = []
+    for row in rows:
+        try:
+            quantity_raw = row.get("quantity")
+            quantity = (
+                float(quantity_raw)
+                if quantity_raw is not None and str(quantity_raw).strip()
+                else None
+            )
+            if quantity is not None and quantity.is_integer():
+                quantity = int(quantity)
+            confidence_raw = row.get("confidence")
+            confidence = (
+                float(confidence_raw) if confidence_raw is not None else 0.7
+            )
+            parts.append(
+                ExtractedPart(
+                    code=str(row.get("code") or ""),
+                    description=str(row.get("description") or ""),
+                    original_description=str(
+                        row.get("original_description")
+                        or row.get("description")
+                        or ""
+                    ),
+                    quantity=quantity,
+                    item=str(row.get("item") or ""),
+                    page=int(row.get("page_number") or 0),
+                    category=str(row.get("category") or "Ricambi"),
+                    assembly_code=str(row.get("assembly_code") or ""),
+                    assembly_title=str(row.get("assembly_title") or ""),
+                    source_type=str(row.get("source_type") or "existing"),
+                    confidence=confidence,
+                    metadata=(
+                        row.get("metadata")
+                        if isinstance(row.get("metadata"), dict)
+                        else {}
+                    ),
+                )
+            )
+        except (TypeError, ValueError):
+            continue
+    return parts
+
+
 def _parts_schema(catalog: dict[str, Any]) -> str:
     configured = os.environ.get("INDEX_PARTS_SCHEMA", "auto").strip().lower()
     if configured not in {"auto", "normalized", "legacy"}:
@@ -1261,7 +1319,11 @@ def _failure_updates(
 ) -> None:
     if not client:
         return
+    previous_report = job.get("report") if job else None
+    if not isinstance(previous_report, dict):
+        previous_report = {}
     report = {
+        **previous_report,
         "outcome": "failed",
         "code": error.code,
         "message": error.message,
@@ -1340,9 +1402,28 @@ def _extract(
             index,
         )
     )
+    previous_report = job.get("report")
+    if not isinstance(previous_report, dict):
+        previous_report = {}
+    completed_before = {
+        int(page) - 1
+        for page in previous_report.get("completedAiPages", [])
+        if isinstance(page, int) and page > 0
+    }
+    previous_unresolved = {
+        int(page) - 1
+        for page in previous_report.get("unresolvedPages", [])
+        if isinstance(page, int) and page > 0
+    }
+    resolved_before = completed_before - previous_unresolved
     max_ai_pages = _env_int("INDEX_MAX_AI_PAGES", 80, 0, 500)
-    selected_ai_indexes = suspect_indexes[:max_ai_pages]
-    unresolved = set(suspect_indexes)
+    eligible_ai_indexes = suspect_indexes[:max_ai_pages]
+    pages_per_run = _env_int("INDEX_AI_PAGES_PER_RUN", 6, 1, 8)
+    pending_ai_indexes = [
+        index for index in eligible_ai_indexes if index not in completed_before
+    ]
+    selected_ai_indexes = pending_ai_indexes[:pages_per_run]
+    unresolved = set(suspect_indexes) - resolved_before
     ai_parts: list[ExtractedPart] = []
     ai_errors: list[dict[str, Any]] = []
     api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
@@ -1372,6 +1453,7 @@ def _extract(
 
     ai_batch_pages = _env_int("INDEX_AI_BATCH_PAGES", 6, 1, 8)
     ai_concurrency = _env_int("INDEX_AI_CONCURRENCY", 2, 1, 4)
+    completed_this_run: set[int] = set()
     page_batches = [
         selected_ai_indexes[offset : offset + ai_batch_pages]
         for offset in range(0, len(selected_ai_indexes), ai_batch_pages)
@@ -1409,6 +1491,7 @@ def _extract(
                 try:
                     extracted = future.result()
                     ai_parts.extend(extracted)
+                    completed_this_run.update(batch)
                     pages_with_parts = {part.page - 1 for part in extracted}
                     for page_index in batch:
                         # Empty is valid for a non-table page, but cannot
@@ -1453,7 +1536,14 @@ def _extract(
             },
         )
 
-    parts = _merge_parts(deterministic_parts, ai_parts)
+    completed_cumulative = completed_before | completed_this_run
+    remaining_ai_indexes = [
+        index
+        for index in eligible_ai_indexes
+        if index not in completed_cumulative
+    ]
+    existing_parts = _existing_catalog_parts(client, str(catalog["id"]))
+    parts = _merge_parts([*existing_parts, *deterministic_parts], ai_parts)
     if not parts:
         if ai_errors and ai_errors[0].get("code") == "ANTHROPIC_NOT_CONFIGURED":
             raise IndexingError(
@@ -1469,7 +1559,11 @@ def _extract(
             {"aiErrors": ai_errors},
         )
 
-    outcome = "ready" if not unresolved and not ai_errors else "needs_review"
+    outcome = (
+        "ready"
+        if not unresolved and not ai_errors and not remaining_ai_indexes
+        else "needs_review"
+    )
     report = {
         "outcome": outcome,
         "adapter": adapter.name,
@@ -1478,12 +1572,20 @@ def _extract(
         "parts": len(parts),
         "deterministicParts": len(deterministic_parts),
         "aiParts": len(ai_parts),
-        "aiPages": [index + 1 for index in selected_ai_indexes],
+        "aiPages": [index + 1 for index in sorted(completed_cumulative)],
+        "aiPagesThisRun": [index + 1 for index in sorted(completed_this_run)],
+        "completedAiPages": [
+            index + 1 for index in sorted(completed_cumulative)
+        ],
+        "remainingAiPages": [
+            index + 1 for index in remaining_ai_indexes
+        ],
         "suspectPages": [index + 1 for index in suspect_indexes],
         "unresolvedPages": [index + 1 for index in sorted(unresolved)],
         "aiErrors": ai_errors,
         "limits": {
             "maxAiPages": max_ai_pages,
+            "pagesPerRun": pages_per_run,
             "maxPdfBytes": _env_int(
                 "INDEX_MAX_PDF_BYTES",
                 DEFAULT_MAX_PDF_BYTES,
@@ -1805,6 +1907,9 @@ class handler(BaseHTTPRequestHandler):
                     {"status": status},
                 )
             started_at = _utc_now()
+            prior_report = job.get("report")
+            if not isinstance(prior_report, dict):
+                prior_report = {}
             locked = _job_update(
                 client,
                 job,
@@ -1815,8 +1920,9 @@ class handler(BaseHTTPRequestHandler):
                     "processed_items": 0,
                     "error_message": None,
                     "report": {
+                        **prior_report,
                         "outcome": "running",
-                        "startedAt": started_at,
+                        "lastStartedAt": started_at,
                     },
                     "started_at": started_at,
                     "completed_at": None,
