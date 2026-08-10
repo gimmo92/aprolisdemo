@@ -14,17 +14,26 @@ export default async function handler(
   const catalogId =
     typeof request.query.catalogId === 'string' ? request.query.catalogId : ''
   const page = z.coerce.number().int().positive().catch(1).parse(request.query.page)
+  const format =
+    typeof request.query.format === 'string' ? request.query.format : ''
   if (!z.string().uuid().safeParse(catalogId).success) {
     return response.status(400).json({ error: 'Catalogo non valido.' })
   }
 
   try {
-    const signedUrl = await createSignedPdfUrl(catalogId)
+    const expiresIn = format === 'json' ? 3600 : 300
+    const signedUrl = await createSignedPdfUrl(catalogId, expiresIn)
     if (!signedUrl) return response.status(404).json({ error: 'PDF non disponibile.' })
     response.setHeader('Cache-Control', 'private, no-store')
+    if (format === 'json') {
+      return response.status(200).json({
+        catalogId,
+        page,
+        pdfUrl: signedUrl,
+      })
+    }
     return response.redirect(302, `${signedUrl}#page=${page}`)
   } catch {
     return response.status(500).json({ error: 'Impossibile aprire il PDF.' })
   }
 }
-

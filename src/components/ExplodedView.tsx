@@ -8,10 +8,9 @@ import {
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   ApiError,
-  getExplodedPage,
+  getExplodedPdfUrl,
   getIndexedParts,
   type CatalogPart,
-  type ExplodedPageResponse,
 } from '../lib/api'
 import {
   fallbackHotspots,
@@ -36,7 +35,6 @@ export default function ExplodedView() {
   const [catalogFilter, setCatalogFilter] = useState('')
   const [selectedKey, setSelectedKey] = useState('')
   const [selectedItem, setSelectedItem] = useState('')
-  const [pageMeta, setPageMeta] = useState<ExplodedPageResponse>()
   const [hotspots, setHotspots] = useState<Hotspot[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [isPageLoading, setIsPageLoading] = useState(false)
@@ -126,7 +124,6 @@ export default function ExplodedView() {
 
   useEffect(() => {
     if (!selectedAssembly) {
-      setPageMeta(undefined)
       setHotspots([])
       setSelectedItem('')
       return
@@ -136,25 +133,22 @@ export default function ExplodedView() {
     setIsPageLoading(true)
     setError('')
     setHotspots([])
-    setPageMeta(undefined)
+    setSelectedItem(selectedAssembly.parts[0]?.item || '')
 
     const load = async () => {
       if (!selectedAssembly.pdfAvailable) {
         if (!active) return
-        setSelectedItem(selectedAssembly.parts[0]?.item || '')
         setHotspots(
           fallbackHotspots(selectedAssembly.parts.map((part) => part.item)),
         )
         return
       }
 
-      const meta = await getExplodedPage(
+      const meta = await getExplodedPdfUrl(
         selectedAssembly.catalogId,
         selectedAssembly.page,
       )
       if (!active) return
-      setPageMeta(meta)
-      setSelectedItem(meta.parts[0]?.item || '')
 
       let canvas = canvasRef.current
       for (let attempt = 0; !canvas && attempt < 20; attempt += 1) {
@@ -168,8 +162,8 @@ export default function ExplodedView() {
       }
       const nextHotspots = await renderExplodedPage(
         meta.pdfUrl,
-        meta.page,
-        meta.parts.map((part) => part.item),
+        selectedAssembly.page,
+        selectedAssembly.parts.map((part) => part.item),
         canvas,
       )
       if (!active) return
@@ -179,7 +173,6 @@ export default function ExplodedView() {
     void load()
       .catch((requestError: unknown) => {
         if (!active) return
-        setPageMeta(undefined)
         setHotspots(
           fallbackHotspots(selectedAssembly.parts.map((part) => part.item)),
         )
@@ -201,7 +194,7 @@ export default function ExplodedView() {
     }
   }, [selectedAssembly])
 
-  const activeParts = pageMeta?.parts || selectedAssembly?.parts || []
+  const activeParts = selectedAssembly?.parts || []
   const selectedPart =
     activeParts.find((part) => part.item === selectedItem) || activeParts[0]
   const selectedIndex = Math.max(
