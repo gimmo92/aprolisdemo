@@ -1459,7 +1459,7 @@ def _extract(
         if isinstance(page, int) and page > 0
     }
     resolved_before = completed_before - previous_unresolved
-    max_ai_pages = _env_int("INDEX_MAX_AI_PAGES", 80, 0, 500)
+    max_ai_pages = _env_int("INDEX_MAX_AI_PAGES", 500, 0, 500)
     eligible_ai_indexes = suspect_indexes[:max_ai_pages]
     pages_per_run = _env_int("INDEX_AI_PAGES_PER_RUN", 1, 1, 8)
     pending_ai_indexes = [
