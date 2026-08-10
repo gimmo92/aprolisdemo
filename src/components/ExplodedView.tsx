@@ -5,7 +5,7 @@ import {
   LoaderCircle,
   PackageOpen,
 } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   ApiError,
   getExplodedPage,
@@ -13,7 +13,6 @@ import {
   type CatalogPart,
   type ExplodedPageResponse,
 } from '../lib/api'
-import { renderExplodedPage, type Hotspot } from '../lib/pdfHotspots'
 
 type AssemblyGroup = {
   key: string
@@ -27,13 +26,11 @@ type AssemblyGroup = {
 }
 
 export default function ExplodedView() {
-  const canvasRef = useRef<HTMLCanvasElement>(null)
   const [parts, setParts] = useState<CatalogPart[]>([])
   const [catalogFilter, setCatalogFilter] = useState('')
   const [selectedKey, setSelectedKey] = useState('')
   const [selectedItem, setSelectedItem] = useState('')
   const [pageMeta, setPageMeta] = useState<ExplodedPageResponse>()
-  const [hotspots, setHotspots] = useState<Hotspot[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [isPageLoading, setIsPageLoading] = useState(false)
   const [error, setError] = useState('')
@@ -123,7 +120,6 @@ export default function ExplodedView() {
   useEffect(() => {
     if (!selectedAssembly) {
       setPageMeta(undefined)
-      setHotspots([])
       setSelectedItem('')
       return
     }
@@ -131,24 +127,14 @@ export default function ExplodedView() {
     let active = true
     setIsPageLoading(true)
     setError('')
-    setHotspots([])
     setPageMeta(undefined)
 
     const load = async () => {
       if (!selectedAssembly.pdfAvailable) {
         if (!active) return
         setSelectedItem(selectedAssembly.parts[0]?.item || '')
-        setHotspots(
-          selectedAssembly.parts.map((part, index) => ({
-            item: part.item || String(index + 1),
-            x: 0.1,
-            y: 0.15 + index * 0.05,
-            synthetic: true,
-          })),
-        )
         return
       }
-
       const meta = await getExplodedPage(
         selectedAssembly.catalogId,
         selectedAssembly.page,
@@ -156,31 +142,17 @@ export default function ExplodedView() {
       if (!active) return
       setPageMeta(meta)
       setSelectedItem(meta.parts[0]?.item || '')
-
-      const canvas = canvasRef.current
-      if (!canvas) return
-      const nextHotspots = await renderExplodedPage(
-        meta.pdfUrl,
-        meta.page,
-        meta.parts.map((part) => part.item),
-        canvas,
-      )
-      if (!active) return
-      setHotspots(nextHotspots)
     }
 
     void load()
       .catch((requestError: unknown) => {
         if (!active) return
         setPageMeta(undefined)
-        setHotspots([])
         setSelectedItem(selectedAssembly.parts[0]?.item || '')
         setError(
           requestError instanceof ApiError
             ? requestError.message
-            : requestError instanceof Error
-              ? requestError.message
-              : 'Esploso non disponibile per questa pagina.',
+            : 'Esploso non disponibile per questa pagina.',
         )
       })
       .finally(() => {
@@ -199,7 +171,6 @@ export default function ExplodedView() {
     0,
     visibleAssemblies.findIndex((assembly) => assembly.key === selectedKey),
   )
-  const showCanvas = Boolean(selectedAssembly?.pdfAvailable && !error)
 
   if (isLoading) {
     return (
@@ -294,56 +265,44 @@ export default function ExplodedView() {
             </button>
           </div>
 
-          <div className="exploded-canvas-wrap">
-            {isPageLoading && (
-              <div className="exploded-canvas-state">
-                <LoaderCircle className="spin" size={24} />
-                <span>Rendering tavola…</span>
-              </div>
-            )}
-            <div
-              className="exploded-canvas"
-              hidden={isPageLoading || !showCanvas}
-            >
-              <canvas ref={canvasRef} />
-              {hotspots.map((hotspot) => (
+          <div className="exploded-canvas-wrap exploded-split">
+            <div className="exploded-pdf-frame">
+              {isPageLoading ? (
+                <div className="exploded-canvas-state">
+                  <LoaderCircle className="spin" size={24} />
+                  <span>Caricamento tavola…</span>
+                </div>
+              ) : pageMeta?.pdfUrl ? (
+                <iframe
+                  title={`Esploso pagina ${pageMeta.page}`}
+                  src={`${pageMeta.pdfUrl}#page=${pageMeta.page}&view=FitH`}
+                />
+              ) : (
+                <div className="exploded-canvas-state">
+                  <PackageOpen size={24} />
+                  <span>
+                    {error ||
+                      'PDF non disponibile per questa tavola. Usa i pallini a destra.'}
+                  </span>
+                </div>
+              )}
+            </div>
+
+            <div className="exploded-hotspot-board" aria-label="Posizioni cliccabili">
+              {activeParts.map((part) => (
                 <button
-                  key={`${hotspot.item}-${hotspot.x}-${hotspot.y}`}
+                  key={`${part.item}-${part.code}`}
                   type="button"
-                  className={`exploded-hotspot ${
-                    selectedItem === hotspot.item ? 'active' : ''
-                  } ${hotspot.synthetic ? 'synthetic' : ''}`}
-                  style={{ left: `${hotspot.x * 100}%`, top: `${hotspot.y * 100}%` }}
-                  onClick={() => setSelectedItem(hotspot.item)}
-                  aria-label={`Ricambio posizione ${hotspot.item}`}
-                  title={`Pos. ${hotspot.item}`}
+                  className={`exploded-hotspot static ${
+                    selectedItem === part.item ? 'active' : ''
+                  }`}
+                  onClick={() => setSelectedItem(part.item)}
+                  title={part.description}
                 >
-                  {hotspot.item}
+                  {part.item || '·'}
                 </button>
               ))}
             </div>
-            {!isPageLoading && !showCanvas && (
-              <div className="exploded-canvas exploded-canvas-fallback">
-                <div className="exploded-fallback-grid">
-                  {(selectedAssembly?.parts || []).map((part) => (
-                    <button
-                      key={`${part.item}-${part.code}`}
-                      type="button"
-                      className={`exploded-hotspot static ${
-                        selectedItem === part.item ? 'active' : ''
-                      }`}
-                      onClick={() => setSelectedItem(part.item)}
-                    >
-                      {part.item || '·'}
-                    </button>
-                  ))}
-                </div>
-                <p>
-                  {error ||
-                    'PDF non disponibile per questa tavola: usa i pallini per scegliere il ricambio.'}
-                </p>
-              </div>
-            )}
           </div>
         </section>
 

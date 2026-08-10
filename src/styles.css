@@ -1875,19 +1875,42 @@ button {
   background: #edf2f7;
   border: 1px solid #dce5ee;
   border-radius: 12px;
+  overflow: hidden;
+}
+
+.exploded-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 88px;
+}
+
+.exploded-pdf-frame {
+  min-height: 520px;
+  background: #d9e2ec;
+}
+
+.exploded-pdf-frame iframe {
+  width: 100%;
+  height: 100%;
+  min-height: 520px;
+  border: 0;
+  background: white;
+}
+
+.exploded-hotspot-board {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 8px;
   overflow: auto;
+  background: #f7fafc;
+  border-left: 1px solid #dce5ee;
 }
 
 .exploded-canvas {
   position: relative;
   width: 100%;
   min-height: 520px;
-}
-
-.exploded-canvas canvas {
-  display: block;
-  width: 100%;
-  height: auto;
 }
 
 .exploded-canvas-state,
