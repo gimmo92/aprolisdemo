@@ -457,13 +457,6 @@ export function AdminCatalogs() {
           <strong>{file?.name || 'Seleziona o trascina un PDF'}</strong>
           <span>Massimo 250 MB</span>
         </label>
-        <div className="auto-detect-note">
-          <CheckCircle2 size={18} />
-          <div>
-            <strong>Riconoscimento automatico</strong>
-            <span>Brand, modello, versione, revisione, cliente, ordine e matricole saranno estratti dal PDF.</span>
-          </div>
-        </div>
         {busy && progress > 0 && <div className="upload-progress"><span style={{ width: `${progress}%` }} /></div>}
         <button className="primary-button" disabled={busy || !file}>
           {busy ? <LoaderCircle className="spin" size={18} /> : <FileUp size={18} />}
