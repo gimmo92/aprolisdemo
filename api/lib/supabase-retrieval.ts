@@ -27,6 +27,8 @@ type PartRow = {
   source_type: 'mechanical' | 'electrical' | 'generic'
 }
 
+type AllPartRow = PartRow & { catalog_id: string }
+
 function mapPart(row: PartRow): IndexedPart {
   const description = row.description || row.original_description || 'Ricambio'
   return {
@@ -135,6 +137,72 @@ export async function getAllSupabaseParts(serial: string) {
     },
     parts: ((data || []) as PartRow[]).map(mapPart),
     storagePath: match.storagePath,
+  }
+}
+
+export async function getAllReadySupabaseParts() {
+  if (!isSupabaseConfigured()) return undefined
+  const supabase = getSupabaseAdmin()
+  const { data: catalogs, error: catalogError } = await supabase
+    .from('catalogs')
+    .select(
+      'id, brand, model, version, customer, order_reference, storage_path, original_filename, page_count, part_count',
+    )
+    .eq('status', 'ready')
+    .order('processed_at', { ascending: false })
+
+  if (catalogError) throw catalogError
+  if (!catalogs?.length) return undefined
+  const catalogRows = catalogs as CatalogRow[]
+  const catalogById = new Map(catalogRows.map((catalog) => [catalog.id, catalog]))
+  const rows: AllPartRow[] = []
+  const pageSize = 1000
+  for (let offset = 0; ; offset += pageSize) {
+    const { data, error } = await supabase
+      .from('parts')
+      .select(
+        'catalog_id, code, description, original_description, quantity, item, page_number, category, assembly_code, assembly_title, source_type',
+      )
+      .in('catalog_id', catalogRows.map((catalog) => catalog.id))
+      .order('catalog_id')
+      .order('page_number')
+      .range(offset, offset + pageSize - 1)
+    if (error) throw error
+    rows.push(...((data || []) as AllPartRow[]))
+    if (!data || data.length < pageSize) break
+  }
+
+  const parts = rows.flatMap((row) => {
+    const catalog = catalogById.get(row.catalog_id)
+    if (!catalog) return []
+    return [{
+      ...mapPart(row),
+      catalogId: catalog.id,
+      catalogName: `${catalog.brand} · ${catalog.model}`,
+      documentName: catalog.original_filename,
+      documentPages: catalog.page_count || 0,
+      pdfAvailable: Boolean(catalog.storage_path),
+    }]
+  })
+
+  return {
+    catalog: {
+      id: 'all-ready',
+      brand: 'Cataloghi Supabase',
+      model: `${catalogRows.length} cataloghi`,
+      version: 'Tutti i cataloghi approvati',
+      customer: '',
+      orderReference: '',
+      serialNumbers: [],
+      documentName: `${catalogRows.length} PDF`,
+      documentPages: catalogRows.reduce(
+        (total, catalog) => total + (catalog.page_count || 0),
+        0,
+      ),
+      partCount: parts.length,
+    } satisfies PublicCatalog,
+    parts,
+    catalogs: catalogRows,
   }
 }
 

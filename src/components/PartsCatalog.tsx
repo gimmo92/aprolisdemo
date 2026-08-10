@@ -48,7 +48,7 @@ export default function PartsCatalog({ serial }: Props) {
     setIsLoading(true)
     setError('')
 
-    getIndexedParts(serial || '13510073')
+    getIndexedParts(serial)
       .then((result) => {
         if (!active) return
         setParts(result.parts)
@@ -224,8 +224,13 @@ export default function PartsCatalog({ serial }: Props) {
             </tr>
           </thead>
           <tbody>
-            {visibleParts.map((part) => (
-              <tr key={`${part.code}-${part.item}-${part.page}`}>
+            {visibleParts.map((part) => {
+              const partCatalogId = part.catalogId || catalog?.id
+              const documentName = part.documentName || catalog?.documentName
+              const documentPages = part.documentPages || catalog?.documentPages
+              const pdfAvailable = part.pdfAvailable ?? catalog?.pdfAvailable
+              return (
+              <tr key={`${partCatalogId}-${part.code}-${part.item}-${part.page}`}>
                 <td data-label="Codice">
                   <strong className="part-code">{part.code}</strong>
                 </td>
@@ -234,6 +239,7 @@ export default function PartsCatalog({ serial }: Props) {
                   {part.originalDescription !== part.description && (
                     <small>{part.originalDescription}</small>
                   )}
+                  {part.catalogName && <small>{part.catalogName}</small>}
                 </td>
                 <td data-label="Quantità">
                   <span className="quantity-badge">{part.quantity}</span>
@@ -249,26 +255,27 @@ export default function PartsCatalog({ serial }: Props) {
                   </span>
                 </td>
                 <td data-label="Riferimento PDF">
-                  {catalog?.pdfAvailable ? (
+                  {pdfAvailable && partCatalogId ? (
                     <a
                       className="pdf-reference"
-                      href={`/api/pdf?catalogId=${encodeURIComponent(catalog.id)}&page=${part.page}`}
+                      href={`/api/pdf?catalogId=${encodeURIComponent(partCatalogId)}&page=${part.page}`}
                       target="_blank"
                       rel="noreferrer"
-                      title={`Apri ${catalog.documentName}`}
+                      title={`Apri ${documentName}`}
                     >
                       <FileText size={15} />
                       Apri pagina {part.page}
                     </a>
                   ) : (
-                    <span className="pdf-reference" title={catalog?.documentName}>
+                    <span className="pdf-reference" title={documentName}>
                       <FileText size={15} />
-                      Pagina {part.page} / {catalog?.documentPages}
+                      Pagina {part.page} / {documentPages}
                     </span>
                   )}
                 </td>
               </tr>
-            ))}
+              )
+            })}
           </tbody>
         </table>
         {!visibleParts.length && (

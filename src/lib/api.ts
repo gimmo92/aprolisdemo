@@ -30,6 +30,11 @@ export type CatalogPart = {
   sourceType: 'mechanical' | 'electrical' | 'generic'
   assemblyCode?: string
   assemblyTitle?: string
+  catalogId?: string
+  catalogName?: string
+  documentName?: string
+  documentPages?: number
+  pdfAvailable?: boolean
 }
 
 export type PartsIndexResponse = {
@@ -104,10 +109,16 @@ export async function identifyCatalog(serial: string) {
   return response.catalog
 }
 
-export function getIndexedParts(serial = '13510073') {
+export function getIndexedParts(serial?: string) {
   return apiFetch<PartsIndexResponse>(
-    `/api/parts?serial=${encodeURIComponent(serial)}`,
+    serial
+      ? `/api/parts?serial=${encodeURIComponent(serial)}`
+      : '/api/parts?scope=all',
   )
+}
+
+export function getCatalogStats() {
+  return apiFetch<{ stats: { catalogs: number; parts: number } }>('/api/catalog')
 }
 
 export function askPartsAssistant(
