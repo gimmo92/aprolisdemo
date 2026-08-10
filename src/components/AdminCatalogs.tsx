@@ -35,6 +35,7 @@ type AdminCatalog = {
       deterministicParts?: number
       aiParts?: number
       unresolvedPages?: number[]
+      remainingAiPages?: number[]
       aiErrors?: Array<{
         page?: number
         code?: string
@@ -233,6 +234,28 @@ export function AdminCatalogs() {
     })
   }
 
+  async function runIndexing(catalogId: string, jobId: string) {
+    let latest: ApiPayload = {}
+    for (let pass = 1; pass <= 50; pass += 1) {
+      const response = await fetch('/api/index_catalog', {
+        method: 'POST',
+        headers: authHeaders,
+        body: JSON.stringify({ catalogId, jobId }),
+      })
+      latest = await readApiPayload(response)
+      if (!response.ok) {
+        throw new Error(latest.error || 'Indicizzazione non riuscita.')
+      }
+      const remaining = latest.report?.remainingAiPages?.length || 0
+      if (!remaining || latest.report?.aiErrors?.length) return latest
+      setMessage(
+        `Indicizzazione in corso: ${remaining} pagine Claude ancora da elaborare…`,
+      )
+      await new Promise((resolve) => window.setTimeout(resolve, 500))
+    }
+    throw new Error('Indicizzazione incompleta dopo troppi passaggi.')
+  }
+
   async function submitCatalog(event: React.FormEvent) {
     event.preventDefault()
     if (!file || !session || !authHeaders) return
@@ -267,18 +290,7 @@ export function AdminCatalogs() {
       }
 
       setMessage('Indicizzazione in corso…')
-      const indexResponse = await fetch('/api/index_catalog', {
-        method: 'POST',
-        headers: authHeaders,
-        body: JSON.stringify({
-          catalogId: created.catalogId,
-          jobId: created.jobId,
-        }),
-      })
-      const indexed = await readApiPayload(indexResponse)
-      if (!indexResponse.ok) {
-        throw new Error(indexed.error || 'Indicizzazione non riuscita.')
-      }
+      const indexed = await runIndexing(created.catalogId, created.jobId)
       setMessage(
         indexed.status === 'needs_review'
           ? 'Indicizzazione completata: alcune pagine richiedono verifica.'
@@ -319,18 +331,7 @@ export function AdminCatalogs() {
     setBusy(true)
     setMessage(`Nuova indicizzazione di ${catalog.original_filename}…`)
     try {
-      const response = await fetch('/api/index_catalog', {
-        method: 'POST',
-        headers: authHeaders,
-        body: JSON.stringify({
-          catalogId: catalog.id,
-          jobId: retryableJob.id,
-        }),
-      })
-      const payload = await readApiPayload(response)
-      if (!response.ok) {
-        throw new Error(payload.error || 'Indicizzazione non riuscita.')
-      }
+      const payload = await runIndexing(catalog.id, retryableJob.id)
       const detail = reportSummary({
         id: retryableJob.id,
         status: payload.status || 'needs_review',
