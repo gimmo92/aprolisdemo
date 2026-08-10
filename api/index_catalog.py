@@ -9,6 +9,7 @@ import os
 import re
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler
 from typing import Any
@@ -59,6 +60,20 @@ class IndexingError(Exception):
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _stale_running_job(job: dict[str, Any]) -> bool:
+    raw = job.get("updated_at")
+    if not isinstance(raw, str):
+        return False
+    try:
+        updated_at = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if updated_at.tzinfo is None:
+        updated_at = updated_at.replace(tzinfo=timezone.utc)
+    stale_seconds = _env_int("INDEX_STALE_JOB_SECONDS", 360, 300, 3600)
+    return (datetime.now(timezone.utc) - updated_at).total_seconds() >= stale_seconds
 
 
 def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
@@ -1321,30 +1336,60 @@ def _extract(
         )
         selected_ai_indexes = []
 
-    for position, page_index in enumerate(selected_ai_indexes):
-        try:
-            extracted = _anthropic_parts(
-                _page_image(document, page_index),
-                page_index + 1,
-                brand,
-                api_key,
-                model,
-            )
-            ai_parts.extend(extracted)
-            # Empty is valid for a non-table page, but cannot resolve a page
-            # already flagged as a sparse/partial parts table.
-            if extracted or not page_results[page_index].parts:
-                unresolved.discard(page_index)
-        except IndexingError as error:
-            ai_errors.append(
-                {
-                    "page": page_index + 1,
-                    "code": error.code,
-                    "message": error.message,
-                    "details": error.details,
-                }
-            )
-        progress = 60 + int(((position + 1) / max(len(selected_ai_indexes), 1)) * 15)
+    ai_concurrency = _env_int("INDEX_AI_CONCURRENCY", 3, 1, 6)
+    completed_ai_pages = 0
+    for batch_start in range(0, len(selected_ai_indexes), ai_concurrency):
+        batch_indexes = selected_ai_indexes[
+            batch_start : batch_start + ai_concurrency
+        ]
+        # PyMuPDF rendering stays on the request thread; only independent HTTP
+        # calls run concurrently.
+        rendered_pages = {
+            page_index: _page_image(document, page_index)
+            for page_index in batch_indexes
+        }
+        with ThreadPoolExecutor(max_workers=len(batch_indexes)) as executor:
+            futures = {
+                executor.submit(
+                    _anthropic_parts,
+                    rendered_pages[page_index],
+                    page_index + 1,
+                    brand,
+                    api_key,
+                    model,
+                ): page_index
+                for page_index in batch_indexes
+            }
+            for future in as_completed(futures):
+                page_index = futures[future]
+                try:
+                    extracted = future.result()
+                    ai_parts.extend(extracted)
+                    # Empty is valid for a non-table page, but cannot resolve a
+                    # page already flagged as a sparse/partial parts table.
+                    if extracted or not page_results[page_index].parts:
+                        unresolved.discard(page_index)
+                except IndexingError as error:
+                    ai_errors.append(
+                        {
+                            "page": page_index + 1,
+                            "code": error.code,
+                            "message": error.message,
+                            "details": error.details,
+                        }
+                    )
+                except Exception as error:
+                    ai_errors.append(
+                        {
+                            "page": page_index + 1,
+                            "code": "ANTHROPIC_INTERNAL_ERROR",
+                            "message": type(error).__name__,
+                        }
+                    )
+                completed_ai_pages += 1
+        progress = 60 + int(
+            (completed_ai_pages / max(len(selected_ai_indexes), 1)) * 15
+        )
         job["progress"] = progress
         _job_update(
             client,
@@ -1397,6 +1442,7 @@ def _extract(
             "batchSize": _env_int(
                 "INDEX_PART_BATCH_SIZE", DEFAULT_BATCH_SIZE, 1, 1000
             ),
+            "aiConcurrency": ai_concurrency,
         },
     }
     return parts, report, outcome
@@ -1694,7 +1740,12 @@ class handler(BaseHTTPRequestHandler):
             retrying_review = (
                 status == "completed" and catalog.get("status") == "needs_review"
             )
-            if status not in {"queued", "failed"} and not retrying_review:
+            retrying_stale = status == "running" and _stale_running_job(job)
+            if (
+                status not in {"queued", "failed"}
+                and not retrying_review
+                and not retrying_stale
+            ):
                 raise IndexingError(
                     409,
                     "JOB_NOT_RUNNABLE",
