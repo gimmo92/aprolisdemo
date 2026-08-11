@@ -9,7 +9,7 @@ import {
   type ReactNode,
 } from 'react'
 import type { Session } from '@supabase/supabase-js'
-import { LoaderCircle, LogIn } from 'lucide-react'
+import { LoaderCircle } from 'lucide-react'
 import { supabase } from './supabase'
 
 type AuthContextValue = {
