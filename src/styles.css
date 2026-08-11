@@ -2003,8 +2003,7 @@ button {
   pointer-events: none;
 }
 
-.exploded-canvas-state,
-.exploded-raster-fallback {
+.exploded-canvas-state {
   min-height: 520px;
   display: grid;
   place-content: center;
@@ -2014,43 +2013,49 @@ button {
   padding: 24px;
 }
 
-.exploded-raster-fallback {
-  grid-template-columns: minmax(0, 1fr) 76px;
-  align-items: start;
-  padding: 0;
+.exploded-raster-stack {
+  position: relative;
+  width: 100%;
+  display: block;
+  background: #f8fafc;
 }
 
-.exploded-raster-fallback img {
+.exploded-raster-art {
   display: block;
   width: 100%;
   height: auto;
   max-height: min(72vh, 820px);
   object-fit: contain;
   background: white;
+  pointer-events: none;
+  user-select: none;
 }
 
-.exploded-raster-fallback > div {
-  display: flex;
-  flex-wrap: wrap;
-  align-content: flex-start;
-  gap: 6px;
-  padding: 10px;
+.exploded-callout-raster .exploded-raster-ring {
+  fill: transparent;
+  stroke: transparent;
+  stroke-width: 1.6;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+  transition: fill 160ms ease, stroke 160ms ease;
 }
 
-.exploded-raster-fallback button {
-  width: 26px;
-  height: 26px;
-  padding: 0;
-  color: white;
-  background: #64748b;
-  border: 2px solid white;
-  border-radius: 50%;
-  font-size: 9px;
-  font-weight: 700;
+.exploded-callout-raster .exploded-callout-tip {
+  fill: transparent;
 }
 
-.exploded-raster-fallback button.active {
-  background: #d9480f;
+.exploded-callout-raster:hover .exploded-raster-ring,
+.exploded-callout-raster:focus-visible .exploded-raster-ring,
+.exploded-callout-raster.active .exploded-raster-ring {
+  fill: rgba(217, 72, 15, 0.18);
+  stroke: #d9480f;
+}
+
+.exploded-callout-raster:hover .exploded-callout-tip,
+.exploded-callout-raster:focus-visible .exploded-callout-tip,
+.exploded-callout-raster.active .exploded-callout-tip,
+.exploded-callout-raster.pulsing .exploded-callout-tip {
+  fill: #d9480f;
 }
 
 @keyframes exploded-callout-in {

@@ -12,6 +12,7 @@ import {
   getExplodedView,
   getExplodedViews,
   type CatalogPart,
+  type ExplodedCallout,
   type ExplodedViewResponse,
   type ExplodedViewSummary,
 } from '../lib/api'
@@ -210,6 +211,101 @@ export default function ExplodedView({ selection, onSelectionChange }: Props) {
   )
   const activePulseItem = hoveredItem || selectedItem
 
+  const renderCalloutLayer = (
+    callouts: ExplodedCallout[],
+    mode: 'vector' | 'raster',
+  ) =>
+    callouts.map((callout) => {
+      const calloutKeys = callout.items.map(normalizeItem)
+      const matches = calloutKeys.some((item) => matchingItems.has(item))
+      const dimmed = Boolean(normalizedQuery && !matches)
+      const active = calloutKeys.includes(selectedKeyItem)
+      const pulsing = calloutKeys.includes(normalizeItem(activePulseItem))
+      return (
+        <g
+          key={callout.id}
+          className={`exploded-callout exploded-callout-${mode} ${
+            active ? 'active' : ''
+          } ${pulsing ? 'pulsing' : ''} ${dimmed ? 'dimmed' : ''}`}
+          onClick={() => selectCallout(callout.items)}
+          role="button"
+          tabIndex={dimmed ? -1 : 0}
+          aria-label={`Apri ricambio posizione ${callout.label}`}
+          onKeyDown={(event) => {
+            if (!dimmed && (event.key === 'Enter' || event.key === ' ')) {
+              event.preventDefault()
+              selectCallout(callout.items)
+            }
+          }}
+        >
+          <circle
+            className="exploded-callout-hit"
+            cx={callout.x}
+            cy={callout.y}
+            r="12"
+          />
+          {mode === 'vector' && (
+            <>
+              <line
+                x1={callout.x}
+                y1={callout.y}
+                x2={callout.tipX}
+                y2={callout.tipY}
+              />
+              <circle
+                className="exploded-callout-hit"
+                cx={callout.tipX}
+                cy={callout.tipY}
+                r="8"
+              />
+              <circle
+                className="exploded-callout-tip"
+                cx={callout.tipX}
+                cy={callout.tipY}
+                r="3.2"
+              />
+              <circle
+                className="exploded-callout-dot"
+                cx={callout.x}
+                cy={callout.y}
+                r="5.2"
+              />
+              <text
+                x={callout.x}
+                y={callout.y}
+                dominantBaseline="central"
+                textAnchor="middle"
+              >
+                {callout.label}
+              </text>
+            </>
+          )}
+          {mode === 'raster' && (
+            <>
+              <circle
+                className="exploded-callout-hit"
+                cx={callout.tipX}
+                cy={callout.tipY}
+                r="9"
+              />
+              <circle
+                className="exploded-raster-ring"
+                cx={callout.x}
+                cy={callout.y}
+                r="7.5"
+              />
+              <circle
+                className="exploded-callout-tip"
+                cx={callout.tipX}
+                cy={callout.tipY}
+                r="3.2"
+              />
+            </>
+          )}
+        </g>
+      )
+    })
+
   if (isLoading) {
     return (
       <div className="catalog-state">
@@ -327,94 +423,31 @@ export default function ExplodedView({ selection, onSelectionChange }: Props) {
                   role="img"
                   aria-label="Posizioni cliccabili sull’esploso"
                 >
-                  {detail.callouts.map((callout) => {
-                    const calloutKeys = callout.items.map(normalizeItem)
-                    const matches = calloutKeys.some((item) =>
-                      matchingItems.has(item),
-                    )
-                    const dimmed = Boolean(normalizedQuery && !matches)
-                    const active = calloutKeys.includes(selectedKeyItem)
-                    const pulsing = calloutKeys.includes(
-                      normalizeItem(activePulseItem),
-                    )
-                    return (
-                      <g
-                        key={callout.id}
-                        className={`exploded-callout ${active ? 'active' : ''} ${
-                          pulsing ? 'pulsing' : ''
-                        } ${dimmed ? 'dimmed' : ''}`}
-                        onClick={() => selectCallout(callout.items)}
-                        role="button"
-                        tabIndex={dimmed ? -1 : 0}
-                        aria-label={`Apri ricambio posizione ${callout.label}`}
-                        onKeyDown={(event) => {
-                          if (!dimmed && (event.key === 'Enter' || event.key === ' ')) {
-                            event.preventDefault()
-                            selectCallout(callout.items)
-                          }
-                        }}
-                      >
-                        <circle
-                          className="exploded-callout-hit"
-                          cx={callout.x}
-                          cy={callout.y}
-                          r="11"
-                        />
-                        <line
-                          x1={callout.x}
-                          y1={callout.y}
-                          x2={callout.tipX}
-                          y2={callout.tipY}
-                        />
-                        <circle
-                          className="exploded-callout-hit"
-                          cx={callout.tipX}
-                          cy={callout.tipY}
-                          r="8"
-                        />
-                        <circle
-                          className="exploded-callout-tip"
-                          cx={callout.tipX}
-                          cy={callout.tipY}
-                          r="3.2"
-                        />
-                        <circle
-                          className="exploded-callout-dot"
-                          cx={callout.x}
-                          cy={callout.y}
-                          r="5.2"
-                        />
-                        <text
-                          x={callout.x}
-                          y={callout.y}
-                          dominantBaseline="central"
-                          textAnchor="middle"
-                        >
-                          {callout.label}
-                        </text>
-                      </g>
-                    )
-                  })}
+                  {renderCalloutLayer(detail.callouts, 'vector')}
                 </svg>
               </div>
             )}
             {!isPageLoading && detail?.view.assetType === 'png' && detail.imageUrl && (
-              <div className="exploded-raster-fallback">
-                <img src={detail.imageUrl} alt={`Tavola ${detail.view.title}`} />
-                <div aria-label="Posizioni non tracciabili">
-                  {detail.callouts.map((callout) => (
-                    <button
-                      key={callout.id}
-                      type="button"
-                      className={
-                        callout.items.includes(selectedItem) ? 'active' : ''
-                      }
-                      onClick={() => selectCallout(callout.items)}
-                    >
-                      {callout.label}
-                    </button>
-                  ))}
-                </div>
+              <div className="exploded-raster-stack">
+                <img
+                  className="exploded-raster-art"
+                  src={detail.imageUrl}
+                  alt={`Tavola ${detail.view.title}`}
+                />
+                {detail.callouts.length > 0 ? (
+                  <svg
+                    className="exploded-hotspot-layer"
+                    viewBox={`0 0 ${detail.view.viewW} ${detail.view.viewH}`}
+                    role="img"
+                    aria-label="Pallini cliccabili sul disegno"
+                  >
+                    {renderCalloutLayer(detail.callouts, 'raster')}
+                  </svg>
+                ) : (
+                  <div className="exploded-canvas-state">
+                    <span>Nessun pallino tracciato su questa tavola.</span>
+                  </div>
+                )}
               </div>
             )}
             {!isPageLoading && error && (
