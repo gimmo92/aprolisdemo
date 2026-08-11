@@ -293,7 +293,9 @@ export function AdminCatalogs() {
 
   async function runIndexing(catalogId: string, jobId: string) {
     let latest: ApiPayload = {}
-    for (let pass = 1; pass <= 50; pass += 1) {
+    let previousRemaining = ''
+    let stalledPasses = 0
+    for (let pass = 1; pass <= 500; pass += 1) {
       const response = await authenticatedFetch('/api/index_catalog', {
         method: 'POST',
         body: JSON.stringify({ catalogId, jobId }),
@@ -302,14 +304,25 @@ export function AdminCatalogs() {
       if (!response.ok) {
         throw new Error(latest.error || 'Indicizzazione non riuscita.')
       }
-      const remaining = latest.report?.remainingAiPages?.length || 0
+      const remainingPages = latest.report?.remainingAiPages || []
+      const remaining = remainingPages.length
       if (!remaining || latest.report?.aiErrors?.length) return latest
+      const signature = remainingPages.join(',')
+      stalledPasses = signature === previousRemaining ? stalledPasses + 1 : 0
+      if (stalledPasses >= 3) {
+        throw new Error(
+          `Indicizzazione senza avanzamento: restano ${remaining} pagine. Premi Riprova.`,
+        )
+      }
+      previousRemaining = signature
       setMessage(
-        `Indicizzazione in corso: ${remaining} pagine Claude ancora da elaborare…`,
+        `Indicizzazione in corso: ${remaining} pagine Claude ancora da elaborare (passaggio ${pass})…`,
       )
       await new Promise((resolve) => window.setTimeout(resolve, 500))
     }
-    throw new Error('Indicizzazione incompleta dopo troppi passaggi.')
+    throw new Error(
+      'Indicizzazione oltre il limite di sicurezza di 500 passaggi. Premi Riprova per continuare.',
+    )
   }
 
   async function submitCatalog(event: React.FormEvent) {
