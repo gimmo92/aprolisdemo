@@ -56,7 +56,6 @@ export default function ExplodedView({ selection, onSelectionChange }: Props) {
   const [isLoading, setIsLoading] = useState(true)
   const [isPageLoading, setIsPageLoading] = useState(false)
   const [error, setError] = useState('')
-  const rowRefs = useRef<Record<string, HTMLButtonElement | null>>({})
 
   useEffect(() => {
     let active = true
@@ -518,9 +517,6 @@ export default function ExplodedView({ selection, onSelectionChange }: Props) {
                 <button
                   key={`${part.item}-${part.code}-${part.page}`}
                   type="button"
-                  ref={(node) => {
-                    rowRefs.current[part.item] = node
-                  }}
                   className={selectedItem === part.item ? 'active' : ''}
                   onClick={() => selectItem(part.item)}
                   onMouseEnter={() => setHoveredItem(part.item)}
