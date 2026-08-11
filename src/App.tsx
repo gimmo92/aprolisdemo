@@ -116,17 +116,16 @@ function residualSearchQuery(raw: string, matchedLabel: string) {
 
 function BrandMark() {
   return (
-    <div className="brand-mark" aria-label="Aestima Parts Finder">
-      <div className="brand-symbol">
-        <span />
-        <span />
-        <span />
-      </div>
-      <div>
-        <strong>AESTIMA</strong>
-        <small>PARTS FINDER</small>
-      </div>
-    </div>
+    <a className="brand-mark" href="/" aria-label="Aestima Parts Finder">
+      <img
+        className="brand-logo"
+        src="/aestima-logo.png"
+        alt="aestima"
+        width={168}
+        height={40}
+      />
+      <span className="brand-product">Parts Finder</span>
+    </a>
   )
 }
 

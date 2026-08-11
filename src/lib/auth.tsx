@@ -92,8 +92,13 @@ function LoginScreen() {
   return (
     <main className="app-shell app-login-shell">
       <section className="app-auth">
-        <LogIn size={30} />
-        <h1>Aestima Parts Finder</h1>
+        <img
+          className="brand-logo brand-logo-login"
+          src="/aestima-logo.png"
+          alt="aestima"
+          width={220}
+          height={52}
+        />
         <p>Accedi per usare chat, catalogo, esplosi e gestione.</p>
         <form onSubmit={authenticate}>
           <input
