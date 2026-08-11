@@ -46,7 +46,10 @@ UUID_RE = re.compile(
     r"[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
     re.I,
 )
-AI_CODE_RE = re.compile(r"^(?=.{3,80}$)(?=.*\d)[A-Z0-9][A-Z0-9._/+()\-]*$", re.I)
+AI_CODE_RE = re.compile(
+    r"^(?=.{2,80}$)(?=.*\d)[A-Z0-9][A-Z0-9._/+()#*\-]*$",
+    re.I,
+)
 
 
 class IndexingError(Exception):
@@ -1048,9 +1051,13 @@ def _anthropic_parts_batch(
     source_pages = {page_number for _, page_number in pages}
     prompt = (
         "Extract only spare-part table rows visibly present in these page images. "
-        "Never infer or complete missing codes. Keep the original description. "
-        f"Brand hint: {brand or 'unknown'}. Source pages: {sorted(source_pages)}. "
-        "Set page_number to the source page shown before each image. "
+        "Never infer or complete missing codes. Keep the original description text "
+        "(including Chinese/English). "
+        f"Brand hint: {brand or 'unknown'}. "
+        f"Allowed page_number values: {sorted(source_pages)}. "
+        "For each image, set page_number EXACTLY to the Source page_number shown "
+        "immediately before that image (not 1..N and not printed catalog page labels). "
+        "Codes may be numeric or alphanumeric; strip spaces inside codes. "
         "Return an empty parts array only when none of the images has a parts table."
     )
     content: list[dict[str, Any]] = []
@@ -1195,14 +1202,39 @@ def _anthropic_parts_batch(
             "La risposta Anthropic contiene valori non validi.",
         )
 
+    page_by_batch_index = {
+        index + 1: page_number for index, (_, page_number) in enumerate(pages)
+    }
     parts: list[ExtractedPart] = []
     rejected_rows = 0
+    rejection_samples: list[dict[str, Any]] = []
+
+    def reject(reason: str, sample: Any = None) -> None:
+        nonlocal rejected_rows
+        rejected_rows += 1
+        if len(rejection_samples) < 5:
+            rejection_samples.append({"reason": reason, "sample": sample})
+
     for index, row in enumerate(rows):
         if not isinstance(row, dict):
-            rejected_rows += 1
+            reject("row_not_object", type(row).__name__)
             continue
-        code = row.get("code")
-        description = row.get("description")
+
+        code_raw = row.get("code")
+        if isinstance(code_raw, (int, float)) and not isinstance(code_raw, bool):
+            code = str(int(code_raw) if float(code_raw).is_integer() else code_raw)
+        else:
+            code = str(code_raw or "").strip()
+        code = (
+            code.replace("\u2212", "-")
+            .replace("\u2013", "-")
+            .replace("\u2014", "-")
+            .replace("\u00a0", " ")
+        )
+        code = re.sub(r"\s+", "", code)
+
+        description_raw = row.get("description")
+        description = str(description_raw or "").strip()
         quantity = row.get("quantity")
         page_number = (
             row.get("page_number")
@@ -1212,8 +1244,8 @@ def _anthropic_parts_batch(
         try:
             if isinstance(page_number, str):
                 page_number = int(page_number.strip())
-            if page_number is None and len(source_pages) == 1:
-                page_number = next(iter(source_pages))
+            elif isinstance(page_number, float) and page_number.is_integer():
+                page_number = int(page_number)
             if isinstance(quantity, str):
                 if quantity.strip():
                     quantity = float(quantity.replace(",", "."))
@@ -1221,28 +1253,46 @@ def _anthropic_parts_batch(
                         quantity = int(quantity)
                 else:
                     quantity = None
+            elif isinstance(quantity, float) and quantity.is_integer():
+                quantity = int(quantity)
         except (TypeError, ValueError):
-            rejected_rows += 1
+            reject("coerce_failed", {"page": page_number, "quantity": quantity})
+            continue
+
+        if page_number not in source_pages:
+            if len(source_pages) == 1:
+                page_number = next(iter(source_pages))
+            elif (
+                isinstance(page_number, int)
+                and not isinstance(page_number, bool)
+                and page_number in page_by_batch_index
+            ):
+                # Model often returns 1..N within the batch instead of PDF page.
+                page_number = page_by_batch_index[page_number]
+            elif page_number is None and len(source_pages) == 1:
+                page_number = next(iter(source_pages))
+
+        if not code or not AI_CODE_RE.fullmatch(code):
+            reject("invalid_code", code_raw)
+            continue
+        if not description:
+            reject("empty_description", description_raw)
             continue
         if (
-            not isinstance(code, str)
-            or not AI_CODE_RE.fullmatch(code.strip())
-            or not isinstance(description, str)
-            or not description.strip()
-            or not isinstance(page_number, int)
+            not isinstance(page_number, int)
             or isinstance(page_number, bool)
             or page_number not in source_pages
-            or (
-                quantity is not None
-                and (
-                    not isinstance(quantity, (int, float))
-                    or isinstance(quantity, bool)
-                    or quantity < 0
-                )
-            )
         ):
-            rejected_rows += 1
+            reject("invalid_page", page_number)
             continue
+        if quantity is not None and (
+            not isinstance(quantity, (int, float))
+            or isinstance(quantity, bool)
+            or quantity < 0
+        ):
+            reject("invalid_quantity", quantity)
+            continue
+
         parts.append(
             ExtractedPart(
                 code=code,
@@ -1275,7 +1325,11 @@ def _anthropic_parts_batch(
             502,
             "ANTHROPIC_INVALID_JSON",
             "Anthropic non ha restituito righe ricambio valide.",
-            {"rejectedRows": rejected_rows},
+            {
+                "rejectedRows": rejected_rows,
+                "rejectionSamples": rejection_samples,
+                "sourcePages": sorted(source_pages),
+            },
         )
     return parts
 
