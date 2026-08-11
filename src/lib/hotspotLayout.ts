@@ -5,6 +5,17 @@ export type Hotspot = {
   synthetic?: boolean
 }
 
+export function scoreHotspotCandidate(
+  matches: Array<{ item: string; x: number }>,
+) {
+  const uniqueItems = new Set(matches.map((match) => match.item))
+  const horizontalBands = new Set(
+    matches.map((match) => Math.round(match.x * 20)),
+  )
+  const duplicates = Math.max(0, matches.length - uniqueItems.size)
+  return uniqueItems.size * 5 + horizontalBands.size * 12 - duplicates * 2
+}
+
 function normalizeItem(value: string) {
   return value.trim().toUpperCase()
 }

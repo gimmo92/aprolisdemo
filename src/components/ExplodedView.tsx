@@ -36,6 +36,7 @@ export default function ExplodedView() {
   const [selectedKey, setSelectedKey] = useState('')
   const [selectedItem, setSelectedItem] = useState('')
   const [hotspots, setHotspots] = useState<Hotspot[]>([])
+  const [drawingPage, setDrawingPage] = useState<number>()
   const [isLoading, setIsLoading] = useState(true)
   const [isPageLoading, setIsPageLoading] = useState(false)
   const [error, setError] = useState('')
@@ -125,6 +126,7 @@ export default function ExplodedView() {
   useEffect(() => {
     if (!selectedAssembly) {
       setHotspots([])
+      setDrawingPage(undefined)
       setSelectedItem('')
       return
     }
@@ -133,6 +135,7 @@ export default function ExplodedView() {
     setIsPageLoading(true)
     setError('')
     setHotspots([])
+    setDrawingPage(undefined)
     setSelectedItem(selectedAssembly.parts[0]?.item || '')
 
     const load = async () => {
@@ -160,14 +163,15 @@ export default function ExplodedView() {
       if (!canvas) {
         throw new Error('Canvas disegno non disponibile.')
       }
-      const nextHotspots = await renderExplodedPage(
+      const rendered = await renderExplodedPage(
         meta.pdfUrl,
         selectedAssembly.page,
         selectedAssembly.parts.map((part) => part.item),
         canvas,
       )
       if (!active) return
-      setHotspots(nextHotspots)
+      setHotspots(rendered.hotspots)
+      setDrawingPage(rendered.drawingPage)
     }
 
     void load()
@@ -284,7 +288,10 @@ export default function ExplodedView() {
             <div>
               <strong>{selectedAssembly?.title}</strong>
               <span>
-                {selectedAssembly?.catalogName} · pagina {selectedAssembly?.page}
+                {selectedAssembly?.catalogName}
+                {drawingPage && drawingPage !== selectedAssembly?.page
+                  ? ` · disegno pag. ${drawingPage} · distinta pag. ${selectedAssembly?.page}`
+                  : ` · pagina ${selectedAssembly?.page}`}
               </span>
             </div>
             <button
