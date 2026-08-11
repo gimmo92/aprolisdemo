@@ -433,6 +433,23 @@ class SupabaseREST:
             },
         )
 
+    def allow_assets_in_catalog_bucket(self, bucket: str) -> None:
+        self._call(
+            "PUT",
+            f"/storage/v1/bucket/{quote(bucket, safe='')}",
+            body={
+                "id": bucket,
+                "name": bucket,
+                "public": False,
+                "file_size_limit": 250 * 1024 * 1024,
+                "allowed_mime_types": [
+                    "application/pdf",
+                    "image/svg+xml",
+                    "image/png",
+                ],
+            },
+        )
+
     def download_private_object(self, bucket: str, storage_path: str) -> tuple[bytes, str]:
         if (
             not storage_path
@@ -1953,19 +1970,40 @@ def _run_indexing(
             "SUPABASE_EXPLODED_BUCKET", "exploded-views"
         ).strip()
         try:
-            client.ensure_private_asset_bucket(exploded_bucket)
-            for upload in exploded_uploads:
-                client.upload_private_object(
-                    exploded_bucket,
-                    str(upload["path"]),
-                    bytes(upload["content"]),
-                    str(upload["content_type"]),
-                    (
-                        str(upload["content_encoding"])
-                        if upload.get("content_encoding")
-                        else None
-                    ),
-                )
+            asset_bucket = exploded_bucket
+            try:
+                client.ensure_private_asset_bucket(asset_bucket)
+                for upload in exploded_uploads:
+                    client.upload_private_object(
+                        asset_bucket,
+                        str(upload["path"]),
+                        bytes(upload["content"]),
+                        str(upload["content_type"]),
+                        None,
+                    )
+            except IndexingError:
+                # Some projects disallow creating additional buckets through
+                # Storage API. The existing private catalog bucket is always
+                # available, so use an isolated asset prefix there.
+                asset_bucket = bucket
+                client.allow_assets_in_catalog_bucket(asset_bucket)
+                for upload in exploded_uploads:
+                    client.upload_private_object(
+                        asset_bucket,
+                        str(upload["path"]),
+                        bytes(upload["content"]),
+                        str(upload["content_type"]),
+                        None,
+                    )
+            report["explodedAssetBucket"] = asset_bucket
+            for view in exploded_views:
+                current_view_metadata = view.get("metadata")
+                if not isinstance(current_view_metadata, dict):
+                    current_view_metadata = {}
+                view["metadata"] = {
+                    **current_view_metadata,
+                    "assetBucket": asset_bucket,
+                }
             if exploded_setup_error is None:
                 persisted_views = client.replace_catalog_exploded_views(
                     str(catalog["id"]),

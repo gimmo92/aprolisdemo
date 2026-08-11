@@ -18,6 +18,7 @@ type ExplodedRow = {
   view_w: number
   view_h: number
   trace_rate: number
+  metadata?: { assetBucket?: string }
   catalogs?: { status?: string } | Array<{ status?: string }>
   callouts?: Array<Record<string, unknown>>
 }
@@ -48,6 +49,10 @@ function metadataViews(
         view_w: Number(row.view_w || 1),
         view_h: Number(row.view_h || 1),
         trace_rate: Number(row.trace_rate || 0),
+        metadata:
+          row.metadata && typeof row.metadata === 'object'
+            ? (row.metadata as { assetBucket?: string })
+            : undefined,
         callouts: Array.isArray(row.callouts)
           ? (row.callouts as Array<Record<string, unknown>>)
           : [],
@@ -112,7 +117,7 @@ export default async function handler(
         const { data, error } = await supabase
           .from('exploded_views')
           .select(
-            'id, catalog_id, machine, figure_code, title, page_index, parts_pages, svg_path, asset_type, view_w, view_h, trace_rate',
+            'id, catalog_id, machine, figure_code, title, page_index, parts_pages, svg_path, asset_type, view_w, view_h, trace_rate, metadata',
           )
           .in('catalog_id', readyIds)
           .order('machine')
@@ -140,7 +145,7 @@ export default async function handler(
     const { data, error } = await supabase
       .from('exploded_views')
       .select(
-        'id, catalog_id, machine, figure_code, title, page_index, parts_pages, svg_path, asset_type, view_w, view_h, trace_rate',
+        'id, catalog_id, machine, figure_code, title, page_index, parts_pages, svg_path, asset_type, view_w, view_h, trace_rate, metadata',
       )
       .eq('id', parsed.data)
       .maybeSingle()
@@ -195,20 +200,45 @@ export default async function handler(
 
     let svg: string | undefined
     let imageUrl: string | undefined
+    const assetBuckets = [
+      view.metadata?.assetBucket,
+      'exploded-views',
+      'catalogs',
+    ].filter((bucket, index, all): bucket is string =>
+      Boolean(bucket) && all.indexOf(bucket) === index,
+    )
     if (view.asset_type === 'svg') {
-      const { data: asset, error: assetError } = await supabase.storage
-        .from('exploded-views')
-        .download(view.svg_path)
+      let asset: Blob | null = null
+      let assetError: unknown
+      for (const bucket of assetBuckets) {
+        const result = await supabase.storage.from(bucket).download(view.svg_path)
+        if (result.data) {
+          asset = result.data
+          assetError = undefined
+          break
+        }
+        assetError = result.error
+      }
       if (assetError || !asset) throw assetError || new Error('SVG non disponibile')
       let bytes = Buffer.from(await asset.arrayBuffer())
       if (bytes[0] === 0x1f && bytes[1] === 0x8b) bytes = gunzipSync(bytes)
       svg = stripUnsafeSvg(bytes.toString('utf8'))
     } else {
-      const { data: signed, error: signError } = await supabase.storage
-        .from('exploded-views')
-        .createSignedUrl(view.svg_path, 3600)
-      if (signError || !signed) throw signError || new Error('Immagine non disponibile')
-      imageUrl = signed.signedUrl
+      let signError: unknown
+      for (const bucket of assetBuckets) {
+        const result = await supabase.storage
+          .from(bucket)
+          .createSignedUrl(view.svg_path, 3600)
+        if (result.data) {
+          imageUrl = result.data.signedUrl
+          signError = undefined
+          break
+        }
+        signError = result.error
+      }
+      if (signError || !imageUrl) {
+        throw signError || new Error('Immagine non disponibile')
+      }
     }
 
     response.setHeader('Cache-Control', 'public, max-age=300, s-maxage=3600')

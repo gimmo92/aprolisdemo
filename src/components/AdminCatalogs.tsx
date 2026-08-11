@@ -569,6 +569,12 @@ export function AdminCatalogs() {
                 ) : (
                   summary && <small className="review-summary">{summary}</small>
                 )}
+                {job?.report?.explodedError && (
+                  <small className="index-error">
+                    Esplosi [{job.report.explodedError.code || 'errore'}]:{' '}
+                    {job.report.explodedError.message || 'asset non salvati'}
+                  </small>
+                )}
               </div>
               <span className="status-badge">{state === 'ready' && <CheckCircle2 size={14} />}{statusLabel(state)} {bundled ? '' : job?.progress ? `${job.progress}%` : ''}</span>
               <span>{catalog.part_count || 0} ricambi</span>
