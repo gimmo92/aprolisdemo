@@ -99,9 +99,6 @@ function reportSummary(
   job: NonNullable<AdminCatalog['ingestion_jobs']>[number] | undefined,
 ) {
   const report = job?.report
-  if (report?.explodedError) {
-    return `Esplosi [${report.explodedError.code || 'errore'}]: ${report.explodedError.message || 'persistenza non disponibile'}`
-  }
   const aiError = report?.aiErrors?.[0]
   if (aiError) {
     const upstream =
@@ -118,7 +115,13 @@ function reportSummary(
     return `Metadati mancanti: ${report.detectedMetadata.missing.join(', ')}`
   }
   if (report?.aiParts !== undefined) {
-    return `Estrazione: ${report.deterministicParts || 0} deterministici + ${report.aiParts} Claude`
+    const extraction = `Estrazione: ${report.deterministicParts || 0} deterministici + ${report.aiParts} Claude`
+    return report.explodedError
+      ? `${extraction} · Ricambi salvati; per gli esplosi applica la migration 002`
+      : extraction
+  }
+  if (report?.explodedError) {
+    return 'Ricambi salvati; per gli esplosi applica la migration 002'
   }
   return ''
 }

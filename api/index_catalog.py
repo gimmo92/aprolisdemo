@@ -412,6 +412,28 @@ class SupabaseREST:
                 {"reason": str(error)},
             ) from error
 
+    def ensure_private_asset_bucket(self, bucket: str) -> None:
+        try:
+            self._call(
+                "GET",
+                f"/storage/v1/bucket/{quote(bucket, safe='')}",
+            )
+            return
+        except IndexingError as error:
+            if error.status != 404:
+                raise
+        self._call(
+            "POST",
+            "/storage/v1/bucket",
+            body={
+                "id": bucket,
+                "name": bucket,
+                "public": False,
+                "file_size_limit": 20 * 1024 * 1024,
+                "allowed_mime_types": ["image/svg+xml", "image/png"],
+            },
+        )
+
     def download_private_object(self, bucket: str, storage_path: str) -> tuple[bytes, str]:
         if (
             not storage_path
@@ -1766,6 +1788,11 @@ def _run_indexing(
     exploded_views: list[dict[str, Any]] = []
     exploded_callouts: list[dict[str, Any]] = []
     exploded_uploads: list[dict[str, Any]] = []
+    exploded_setup_error: IndexingError | None = None
+    try:
+        client.select("exploded_views", {"select": "id", "limit": "1"})
+    except IndexingError as error:
+        exploded_setup_error = error
     try:
         detected_metadata = _detect_catalog_metadata(document, catalog)
         if detected_metadata.get("missing"):
@@ -1851,7 +1878,10 @@ def _run_indexing(
             },
         )
         parts, report, outcome = _extract(client, job, catalog, document, checksum)
-        if not report.get("remainingAiPages") or report.get("aiErrors"):
+        if (
+            exploded_setup_error is None
+            and (not report.get("remainingAiPages") or report.get("aiErrors"))
+        ):
             _job_update(
                 client,
                 job,
@@ -1898,6 +1928,11 @@ def _run_indexing(
                 }
                 for view in exploded_views
             ]
+        elif exploded_setup_error is not None:
+            report["explodedError"] = {
+                "code": "EXPLODED_SCHEMA_NOT_READY",
+                "message": "Applica la migration Supabase 002 per generare gli esplosi.",
+            }
         page_count = document.page_count
     finally:
         document.close()
@@ -1917,6 +1952,7 @@ def _run_indexing(
             "SUPABASE_EXPLODED_BUCKET", "exploded-views"
         ).strip()
         try:
+            client.ensure_private_asset_bucket(exploded_bucket)
             for upload in exploded_uploads:
                 client.upload_private_object(
                     exploded_bucket,
