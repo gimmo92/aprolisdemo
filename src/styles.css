@@ -1425,6 +1425,14 @@ a.pdf-reference:hover {
 
 .upload-card,
 .catalog-admin-list,
+.app-login-shell {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.app-auth,
 .admin-auth,
 .admin-empty {
   padding: 24px;
@@ -1434,12 +1442,25 @@ a.pdf-reference:hover {
   box-shadow: 0 10px 30px rgba(30, 64, 175, .06);
 }
 
+.app-auth h1 {
+  margin: 10px 0 6px;
+  color: #1b334b;
+  font: 700 22px 'Manrope', sans-serif;
+}
+
+.app-auth > p {
+  margin: 0 0 8px;
+  color: #64748b;
+  font-size: 13px;
+}
+
 .upload-title {
   justify-content: flex-start;
   margin-bottom: 18px;
 }
 
 .upload-title > svg,
+.app-auth > svg,
 .admin-auth > svg,
 .admin-empty > svg {
   color: #2563eb;
@@ -1491,6 +1512,7 @@ a.pdf-reference:hover {
 }
 
 .metadata-grid label,
+.app-auth form,
 .admin-auth form {
   display: grid;
   gap: 6px;
@@ -1505,6 +1527,7 @@ a.pdf-reference:hover {
 
 .metadata-grid input,
 .metadata-grid textarea,
+.app-auth input,
 .admin-auth input {
   width: 100%;
   padding: 11px 12px;
@@ -1523,6 +1546,7 @@ a.pdf-reference:hover {
 
 .metadata-grid input:focus,
 .metadata-grid textarea:focus,
+.app-auth input:focus,
 .admin-auth input:focus {
   border-color: #2563eb;
   box-shadow: 0 0 0 3px rgba(37, 99, 235, .1);
@@ -1730,6 +1754,7 @@ a.pdf-reference:hover {
   background: #f0fdf4;
 }
 
+.app-auth,
 .admin-auth,
 .admin-empty {
   max-width: 440px;
@@ -1737,6 +1762,7 @@ a.pdf-reference:hover {
   text-align: center;
 }
 
+.app-auth form,
 .admin-auth form {
   margin: 20px 0 10px;
 }

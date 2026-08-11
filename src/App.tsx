@@ -8,6 +8,7 @@ import {
   Layers,
   LibraryBig,
   LoaderCircle,
+  LogOut,
   MessageCircle,
   PackageSearch,
   RotateCcw,
@@ -31,6 +32,7 @@ import {
   identifyCatalog,
   type ChatHistoryItem,
 } from './lib/api'
+import { useAuth } from './lib/auth'
 
 type Phase = 'serial' | 'search'
 type ActiveView = 'chat' | 'catalog' | 'esplosi' | 'admin'
@@ -230,6 +232,7 @@ function ChatMessage({
 }
 
 function App() {
+  const { session, signOut } = useAuth()
   const [phase, setPhase] = useState<Phase>('serial')
   const [activeView, setActiveView] = useState<ActiveView>('chat')
   const [selectedSerial, setSelectedSerial] = useState<string>()
@@ -409,11 +412,19 @@ function App() {
         <div className="topbar-right">
           <span className="status-chip">
             <span className="status-dot" />
-            Catalogo operativo
+            {session.user.email || 'Catalogo operativo'}
           </span>
           <button className="reset-button" onClick={reset} type="button">
             <RotateCcw size={16} />
             Nuova ricerca
+          </button>
+          <button
+            className="reset-button"
+            onClick={() => void signOut()}
+            type="button"
+          >
+            <LogOut size={16} />
+            Esci
           </button>
         </div>
       </header>

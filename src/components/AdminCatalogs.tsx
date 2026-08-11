@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useState } from 'react'
-import type { Session } from '@supabase/supabase-js'
 import * as tus from 'tus-js-client'
 import {
   AlertCircle,
@@ -7,11 +6,14 @@ import {
   CheckCircle2,
   FileUp,
   LoaderCircle,
-  LogIn,
-  LogOut,
   RefreshCw,
   Trash2,
 } from 'lucide-react'
+import {
+  authenticatedFetch,
+  getValidSession,
+  useAuth,
+} from '../lib/auth'
 import {
   supabase,
   supabasePublishableKey,
@@ -149,72 +151,21 @@ async function readApiPayload(response: Response): Promise<ApiPayload> {
   }
 }
 
-async function validAdminSession(forceRefresh = false) {
-  if (!supabase) throw new Error('Supabase non configurato.')
-  const current = await supabase.auth.getSession()
-  let active = current.data.session
-  const expiresSoon =
-    !active?.expires_at || active.expires_at * 1000 <= Date.now() + 90_000
-  if (forceRefresh || expiresSoon) {
-    const refreshed = await supabase.auth.refreshSession()
-    if (refreshed.error || !refreshed.data.session) {
-      throw new Error('Sessione scaduta. Accedi nuovamente.')
-    }
-    active = refreshed.data.session
-  }
-  if (!active) throw new Error('Sessione scaduta. Accedi nuovamente.')
-  return active
-}
-
-async function authenticatedFetch(input: RequestInfo | URL, init: RequestInit = {}) {
-  const execute = async (forceRefresh: boolean) => {
-    const active = await validAdminSession(forceRefresh)
-    return fetch(input, {
-      ...init,
-      headers: {
-        'Content-Type': 'application/json',
-        ...init.headers,
-        Authorization: `Bearer ${active.access_token}`,
-      },
-    })
-  }
-  const response = await execute(false)
-  return response.status === 401 ? execute(true) : response
-}
-
 export function AdminCatalogs() {
-  const [session, setSession] = useState<Session | null>(null)
+  const { session } = useAuth()
   const [role, setRole] = useState<string>()
   const [loading, setLoading] = useState(true)
-  const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
-  const [authMode, setAuthMode] = useState<'login' | 'signup'>('login')
   const [file, setFile] = useState<File>()
   const [progress, setProgress] = useState(0)
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
   const [catalogs, setCatalogs] = useState<AdminCatalog[]>([])
 
-  useEffect(() => {
-    if (!supabase) {
-      setLoading(false)
-      return
-    }
-    supabase.auth.getSession().then(({ data }) => {
-      setSession(data.session)
-      setLoading(false)
-    })
-    const { data } = supabase.auth.onAuthStateChange((_event, nextSession) => {
-      setSession(nextSession)
-      if (!nextSession) setRole(undefined)
-    })
-    return () => data.subscription.unsubscribe()
-  }, [])
-
   const refresh = useCallback(async () => {
     if (!supabase || !session) return
+    setLoading(true)
     try {
-      const active = await validAdminSession()
+      const active = await getValidSession()
       const { data } = await supabase
         .from('profiles')
         .select('role')
@@ -229,31 +180,14 @@ export function AdminCatalogs() {
       setMessage(
         error instanceof Error ? error.message : 'Sessione non disponibile.',
       )
+    } finally {
+      setLoading(false)
     }
   }, [session])
 
   useEffect(() => {
     void refresh()
   }, [refresh])
-
-  async function authenticate(event: React.FormEvent) {
-    event.preventDefault()
-    if (!supabase) return
-    setBusy(true)
-    setMessage('')
-    const result =
-      authMode === 'login'
-        ? await supabase.auth.signInWithPassword({ email, password })
-        : await supabase.auth.signUp({ email, password })
-    setBusy(false)
-    setMessage(
-      result.error
-        ? result.error.message
-        : authMode === 'signup'
-          ? 'Account creato. Conferma l’email, poi chiedi la promozione ad admin.'
-          : 'Accesso effettuato.',
-    )
-  }
 
   function uploadTus(selectedFile: File, objectName: string) {
     return new Promise<void>((resolve, reject) => {
@@ -272,7 +206,7 @@ export function AdminCatalogs() {
           'x-upsert': 'false',
         },
         onBeforeRequest: async (request) => {
-          const active = await validAdminSession()
+          const active = await getValidSession()
           request.setHeader('authorization', `Bearer ${active.access_token}`)
         },
         metadata: {
@@ -343,7 +277,7 @@ export function AdminCatalogs() {
     setProgress(0)
     const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_')
     try {
-      const active = await validAdminSession()
+      const active = await getValidSession()
       const storagePath = `${active.user.id}/${crypto.randomUUID()}-${safeName}`
       await uploadTus(file, storagePath)
       setMessage('Registrazione catalogo…')
@@ -452,26 +386,6 @@ export function AdminCatalogs() {
       </div>
     )
   }
-  const supabaseClient = supabase
-  if (!session) {
-    return (
-      <section className="admin-auth">
-        <LogIn size={30} />
-        <h2>{authMode === 'login' ? 'Accesso amministratore' : 'Crea account'}</h2>
-        <form onSubmit={authenticate}>
-          <input name="email" type="email" placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)} required />
-          <input name="password" type="password" placeholder="Password" minLength={8} value={password} onChange={(e) => setPassword(e.target.value)} required />
-          <button className="primary-button" disabled={busy}>
-            {busy ? <LoaderCircle className="spin" size={18} /> : 'Continua'}
-          </button>
-        </form>
-        <button className="link-button" onClick={() => setAuthMode(authMode === 'login' ? 'signup' : 'login')}>
-          {authMode === 'login' ? 'Crea un account' : 'Ho già un account'}
-        </button>
-        {message && <p className="form-message">{message}</p>}
-      </section>
-    )
-  }
   if (role !== 'admin') {
     return (
       <div className="admin-empty">
@@ -480,7 +394,6 @@ export function AdminCatalogs() {
         <p>Promuovi questo utente dal SQL Editor Supabase, quindi aggiorna.</p>
         <div className="admin-actions">
           <button onClick={() => void refresh()}><RefreshCw size={16} /> Aggiorna</button>
-          <button onClick={() => void supabaseClient.auth.signOut()}><LogOut size={16} /> Esci</button>
         </div>
       </div>
     )
@@ -493,9 +406,6 @@ export function AdminCatalogs() {
           <span className="eyebrow">Area riservata</span>
           <h2>Gestione cataloghi</h2>
         </div>
-        <button className="secondary-button" onClick={() => void supabaseClient.auth.signOut()}>
-          <LogOut size={16} /> Esci
-        </button>
       </header>
       <form className="upload-card" onSubmit={submitCatalog}>
         <div className="upload-title"><FileUp /><div><h3>Nuovo catalogo PDF</h3><p>Carica il documento: tutti i dati vengono riconosciuti automaticamente.</p></div></div>
