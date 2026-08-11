@@ -19,6 +19,41 @@ type ExplodedRow = {
   view_h: number
   trace_rate: number
   catalogs?: { status?: string } | Array<{ status?: string }>
+  callouts?: Array<Record<string, unknown>>
+}
+
+function metadataViews(
+  catalogs: Array<{ id: string; metadata: unknown }>,
+): ExplodedRow[] {
+  return catalogs.flatMap((catalog) => {
+    if (!catalog.metadata || typeof catalog.metadata !== 'object') return []
+    const views = (catalog.metadata as { explodedViews?: unknown }).explodedViews
+    if (!Array.isArray(views)) return []
+    return views.flatMap((view) => {
+      if (!view || typeof view !== 'object') return []
+      const row = view as Record<string, unknown>
+      if (typeof row.id !== 'string') return []
+      return [{
+        id: row.id,
+        catalog_id: catalog.id,
+        machine: String(row.machine || 'Catalogo'),
+        figure_code: String(row.figure_code || ''),
+        title: String(row.title || row.figure_code || 'Tavola'),
+        page_index: Number(row.page_index || 1),
+        parts_pages: Array.isArray(row.parts_pages)
+          ? row.parts_pages.map(Number)
+          : [],
+        svg_path: String(row.svg_path || ''),
+        asset_type: row.asset_type === 'png' ? 'png' : 'svg',
+        view_w: Number(row.view_w || 1),
+        view_h: Number(row.view_h || 1),
+        trace_rate: Number(row.trace_rate || 0),
+        callouts: Array.isArray(row.callouts)
+          ? (row.callouts as Array<Record<string, unknown>>)
+          : [],
+      } satisfies ExplodedRow]
+    })
+  })
 }
 
 function stripUnsafeSvg(markup: string) {
@@ -74,16 +109,23 @@ export default async function handler(
         .eq('catalogs.status', 'ready')
         .order('machine')
         .order('title')
-      if (error) {
-        if (error.code === '42P01' || error.code === 'PGRST205') {
-          return response.status(200).json({ views: [] })
-        }
+      if (error && error.code !== '42P01' && error.code !== 'PGRST205') {
         throw error
+      }
+      const { data: catalogs, error: catalogError } = await supabase
+        .from('catalogs')
+        .select('id, metadata')
+        .eq('status', 'ready')
+      if (catalogError) throw catalogError
+      const merged = new Map<string, ExplodedRow>()
+      for (const row of (data || []) as ExplodedRow[]) merged.set(row.id, row)
+      for (const row of metadataViews(catalogs || [])) {
+        if (!merged.has(row.id)) merged.set(row.id, row)
       }
       response.setHeader('Cache-Control', 'public, max-age=60, s-maxage=300')
       return response
         .status(200)
-        .json({ views: ((data || []) as ExplodedRow[]).map(publicView) })
+        .json({ views: [...merged.values()].map(publicView) })
     }
 
     const parsed = viewIdSchema.safeParse(rawViewId)
@@ -98,27 +140,43 @@ export default async function handler(
       .eq('id', parsed.data)
       .eq('catalogs.status', 'ready')
       .maybeSingle()
-    if (error || !data) {
+    let view = data as ExplodedRow | null
+    if (error && error.code !== '42P01' && error.code !== 'PGRST205') {
+      throw error
+    }
+    if (!view) {
+      const { data: catalogs, error: catalogError } = await supabase
+        .from('catalogs')
+        .select('id, metadata')
+        .eq('status', 'ready')
+      if (catalogError) throw catalogError
+      view =
+        metadataViews(catalogs || []).find((candidate) => candidate.id === parsed.data) ||
+        null
+    }
+    if (!view) {
       return response.status(404).json({ error: 'Tavola non disponibile.' })
     }
-    const view = data as ExplodedRow
 
+    const partsRequest = supabase
+      .from('parts')
+      .select(
+        'code, description, original_description, quantity, item, page_number, category, assembly_code, assembly_title, source_type',
+      )
+      .eq('catalog_id', view.catalog_id)
+      .in('page_number', view.parts_pages)
+      .order('page_number')
+      .order('item')
     const [{ data: callouts, error: calloutError }, { data: parts, error: partsError }] =
       await Promise.all([
-        supabase
-          .from('exploded_callouts')
-          .select('id, label, items, x, y, tip_x, tip_y, traced')
-          .eq('view_id', view.id)
-          .order('label'),
-        supabase
-          .from('parts')
-          .select(
-            'code, description, original_description, quantity, item, page_number, category, assembly_code, assembly_title, source_type',
-          )
-          .eq('catalog_id', view.catalog_id)
-          .in('page_number', view.parts_pages)
-          .order('page_number')
-          .order('item'),
+        view.callouts
+          ? Promise.resolve({ data: view.callouts, error: null })
+          : supabase
+              .from('exploded_callouts')
+              .select('id, label, items, x, y, tip_x, tip_y, traced')
+              .eq('view_id', view.id)
+              .order('label'),
+        partsRequest,
       ])
     if (calloutError || partsError) throw calloutError || partsError
 

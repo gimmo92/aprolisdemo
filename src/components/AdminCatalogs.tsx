@@ -569,8 +569,8 @@ export function AdminCatalogs() {
                 </span>
               )}
               <div className="admin-row-actions">
-                {!bundled && (state === 'failed' || retryableReview || stale) && (
-                  <button className="icon-retry" onClick={() => void retryCatalog(catalog)} disabled={busy} aria-label="Riprova indicizzazione"><RefreshCw size={17} /></button>
+                {!bundled && (state === 'ready' || state === 'failed' || retryableReview || stale) && (
+                  <button className="icon-retry" onClick={() => void retryCatalog(catalog)} disabled={busy} aria-label={state === 'ready' ? 'Rigenera indice ed esplosi' : 'Riprova indicizzazione'} title={state === 'ready' ? 'Rigenera indice ed esplosi' : 'Riprova indicizzazione'}><RefreshCw size={17} /></button>
                 )}
                 {!bundled && state === 'needs_review' && (
                   <button className="icon-approve" onClick={() => void approveCatalog(catalog)} disabled={busy} aria-label="Approva catalogo" title="Approva catalogo"><BadgeCheck size={17} /></button>

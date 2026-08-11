@@ -381,8 +381,9 @@ class SupabaseREST:
             "Cache-Control": "public, max-age=31536000, immutable",
             "x-upsert": "true",
         }
-        if content_encoding:
-            headers["Content-Encoding"] = content_encoding
+        # Supabase Storage currently ignores Content-Encoding metadata. Keep the
+        # object gzipped at rest and let /api/exploded detect/decompress it.
+        _ = content_encoding
         path = (
             f"/storage/v1/object/{quote(bucket, safe='')}/"
             f"{quote(storage_path, safe='/')}"
@@ -1465,11 +1466,17 @@ def _catalog_update(
 ) -> None:
     supported = set(catalog)
     payload = {key: value for key, value in values.items() if key in supported}
-    if "metadata" in supported and "report" in values:
-        metadata = catalog.get("metadata")
-        if not isinstance(metadata, dict):
-            metadata = {}
-        payload["metadata"] = {**metadata, "indexing": values["report"]}
+    if "metadata" in supported:
+        current_metadata = catalog.get("metadata")
+        if not isinstance(current_metadata, dict):
+            current_metadata = {}
+        next_metadata = values.get("metadata")
+        if not isinstance(next_metadata, dict):
+            next_metadata = {}
+        merged_metadata = {**current_metadata, **next_metadata}
+        if "report" in values:
+            merged_metadata["indexing"] = values["report"]
+        payload["metadata"] = merged_metadata
     client.patch("catalogs", {"id": f"eq.{catalog['id']}"}, payload)
 
 
@@ -1878,10 +1885,10 @@ def _run_indexing(
             },
         )
         parts, report, outcome = _extract(client, job, catalog, document, checksum)
-        if (
-            exploded_setup_error is None
-            and (not report.get("remainingAiPages") or report.get("aiErrors"))
-        ):
+        if job.get("_preserve_ready") and parts:
+            outcome = "ready"
+            report["outcome"] = "ready"
+        if not report.get("remainingAiPages") or report.get("aiErrors"):
             _job_update(
                 client,
                 job,
@@ -1928,11 +1935,6 @@ def _run_indexing(
                 }
                 for view in exploded_views
             ]
-        elif exploded_setup_error is not None:
-            report["explodedError"] = {
-                "code": "EXPLODED_SCHEMA_NOT_READY",
-                "message": "Applica la migration Supabase 002 per generare gli esplosi.",
-            }
         page_count = document.page_count
     finally:
         document.close()
@@ -1947,6 +1949,7 @@ def _run_indexing(
     # Delete + insert run in one Postgres transaction. A bad row or transport
     # failure cannot leave a previously usable catalog partially replaced.
     accepted = client.replace_catalog_parts(str(catalog["id"]), rows)
+    exploded_metadata_views: list[dict[str, Any]] = []
     if exploded_views:
         exploded_bucket = os.environ.get(
             "SUPABASE_EXPLODED_BUCKET", "exploded-views"
@@ -1965,11 +1968,28 @@ def _run_indexing(
                         else None
                     ),
                 )
-            persisted_views = client.replace_catalog_exploded_views(
-                str(catalog["id"]),
-                exploded_views,
-                exploded_callouts,
-            )
+            if exploded_setup_error is None:
+                persisted_views = client.replace_catalog_exploded_views(
+                    str(catalog["id"]),
+                    exploded_views,
+                    exploded_callouts,
+                )
+                report["explodedStorage"] = "normalized_tables"
+            else:
+                callouts_by_view: dict[str, list[dict[str, Any]]] = {}
+                for callout in exploded_callouts:
+                    callouts_by_view.setdefault(
+                        str(callout["view_id"]), []
+                    ).append(callout)
+                exploded_metadata_views = [
+                    {
+                        **view,
+                        "callouts": callouts_by_view.get(str(view["id"]), []),
+                    }
+                    for view in exploded_views
+                ]
+                persisted_views = len(exploded_metadata_views)
+                report["explodedStorage"] = "catalog_metadata"
             report["persistedExplodedViews"] = persisted_views
         except IndexingError as error:
             # Deploying code before migration 002 must not make the parts index
@@ -2002,6 +2022,20 @@ def _run_indexing(
         "processed_at": _utc_now(),
         "indexed_at": _utc_now(),
         "report": report,
+        **(
+            {
+                "metadata": {
+                    **(
+                        catalog.get("metadata")
+                        if isinstance(catalog.get("metadata"), dict)
+                        else {}
+                    ),
+                    "explodedViews": exploded_metadata_views,
+                }
+            }
+            if exploded_metadata_views
+            else {}
+        ),
     }
     _catalog_update(client, catalog, catalog_values)
 
@@ -2151,10 +2185,14 @@ class handler(BaseHTTPRequestHandler):
             retrying_review = (
                 status == "completed" and catalog.get("status") == "needs_review"
             )
+            rebuilding_ready = (
+                status == "completed" and catalog.get("status") == "ready"
+            )
             retrying_stale = status == "running" and _stale_running_job(job)
             if (
                 status not in {"queued", "failed"}
                 and not retrying_review
+                and not rebuilding_ready
                 and not retrying_stale
             ):
                 raise IndexingError(
@@ -2194,6 +2232,7 @@ class handler(BaseHTTPRequestHandler):
                     "Il job è già stato avviato da un altro processo.",
                 )
             job.update(locked[0])
+            job["_preserve_ready"] = rebuilding_ready
             claimed = True
             response, response_status = _run_indexing(client, job, catalog)
             response["elapsedSeconds"] = round(time.monotonic() - started, 3)
