@@ -1423,8 +1423,6 @@ a.pdf-reference:hover {
   text-transform: uppercase;
 }
 
-.upload-card,
-.catalog-admin-list,
 .app-login-shell {
   min-height: 100vh;
   display: grid;
@@ -1432,6 +1430,8 @@ a.pdf-reference:hover {
   padding: 24px;
 }
 
+.upload-card,
+.catalog-admin-list,
 .app-auth,
 .admin-auth,
 .admin-empty {
@@ -1639,12 +1639,20 @@ a.pdf-reference:hover {
 
 .admin-catalog-row {
   display: grid;
-  grid-template-columns: 10px minmax(220px, 1fr) auto auto auto auto;
+  grid-template-columns: 10px minmax(0, 1fr) auto;
   align-items: center;
   gap: 14px;
   padding: 13px 2px;
   border-top: 1px solid #edf0f4;
   font-size: 13px;
+}
+
+.admin-catalog-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px 14px;
 }
 
 .admin-catalog-main {
@@ -1788,15 +1796,12 @@ a.pdf-reference:hover {
   }
 
   .admin-catalog-row {
-    grid-template-columns: 10px 1fr auto;
+    grid-template-columns: 10px minmax(0, 1fr);
   }
 
-  .admin-catalog-row > span:not(.status-badge) {
-    display: none;
-  }
-
-  .admin-row-actions {
-    grid-column: 3;
+  .admin-catalog-meta {
+    grid-column: 2;
+    justify-content: flex-start;
   }
 }
 

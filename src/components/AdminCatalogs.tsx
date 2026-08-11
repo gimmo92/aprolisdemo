@@ -486,28 +486,73 @@ export function AdminCatalogs() {
                   </small>
                 )}
               </div>
-              <span className="status-badge">{state === 'ready' && <CheckCircle2 size={14} />}{statusLabel(state)} {bundled ? '' : job?.progress ? `${job.progress}%` : ''}</span>
-              <span>{catalog.part_count || 0} ricambi</span>
-              {!bundled && traceRate !== undefined && (
-                <span className={`exploded-quality ${traceRate >= 0.8 ? 'good' : 'review'}`}>
-                  Esplosi {Math.round(traceRate * 100)}%
+              <div className="admin-catalog-meta">
+                <span className="status-badge">
+                  {state === 'ready' && <CheckCircle2 size={14} />}
+                  {statusLabel(state)}{' '}
+                  {bundled ? '' : job?.progress ? `${job.progress}%` : ''}
                 </span>
-              )}
-              {!bundled && traceRate === undefined && job?.report?.explodedViews !== undefined && (
-                <span className="exploded-quality review">
-                  Esplosi non salvati
-                </span>
-              )}
-              <div className="admin-row-actions">
-                {!bundled && (state === 'ready' || state === 'failed' || retryableReview || stale) && (
-                  <button className="icon-retry" onClick={() => void retryCatalog(catalog)} disabled={busy} aria-label={state === 'ready' ? 'Rigenera indice ed esplosi' : 'Riprova indicizzazione'} title={state === 'ready' ? 'Rigenera indice ed esplosi' : 'Riprova indicizzazione'}><RefreshCw size={17} /></button>
+                <span>{catalog.part_count || 0} ricambi</span>
+                {!bundled && traceRate !== undefined && (
+                  <span
+                    className={`exploded-quality ${traceRate >= 0.8 ? 'good' : 'review'}`}
+                  >
+                    Esplosi {Math.round(traceRate * 100)}%
+                  </span>
                 )}
-                {!bundled && state === 'needs_review' && (
-                  <button className="icon-approve" onClick={() => void approveCatalog(catalog)} disabled={busy} aria-label="Approva catalogo" title="Approva catalogo"><BadgeCheck size={17} /></button>
-                )}
-                {!bundled && (
-                  <button className="icon-danger" onClick={() => void removeCatalog(catalog)} disabled={busy} aria-label="Elimina catalogo"><Trash2 size={17} /></button>
-                )}
+                {!bundled &&
+                  traceRate === undefined &&
+                  job?.report?.explodedViews !== undefined && (
+                    <span className="exploded-quality review">
+                      Esplosi non salvati
+                    </span>
+                  )}
+                <div className="admin-row-actions">
+                  {!bundled &&
+                    (state === 'ready' ||
+                      state === 'failed' ||
+                      retryableReview ||
+                      stale) && (
+                      <button
+                        className="icon-retry"
+                        onClick={() => void retryCatalog(catalog)}
+                        disabled={busy}
+                        aria-label={
+                          state === 'ready'
+                            ? 'Rigenera indice ed esplosi'
+                            : 'Riprova indicizzazione'
+                        }
+                        title={
+                          state === 'ready'
+                            ? 'Rigenera indice ed esplosi'
+                            : 'Riprova indicizzazione'
+                        }
+                      >
+                        <RefreshCw size={17} />
+                      </button>
+                    )}
+                  {!bundled && state === 'needs_review' && (
+                    <button
+                      className="icon-approve"
+                      onClick={() => void approveCatalog(catalog)}
+                      disabled={busy}
+                      aria-label="Approva catalogo"
+                      title="Approva catalogo"
+                    >
+                      <BadgeCheck size={17} />
+                    </button>
+                  )}
+                  {!bundled && (
+                    <button
+                      className="icon-danger"
+                      onClick={() => void removeCatalog(catalog)}
+                      disabled={busy}
+                      aria-label="Elimina catalogo"
+                    >
+                      <Trash2 size={17} />
+                    </button>
+                  )}
+                </div>
               </div>
             </article>
           )
