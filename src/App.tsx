@@ -53,14 +53,14 @@ const initialMessage: Message = {
 
 function BrandMark() {
   return (
-    <div className="brand-mark" aria-label="Apròlis Parts Finder">
+    <div className="brand-mark" aria-label="Aestima Parts Finder">
       <div className="brand-symbol">
         <span />
         <span />
         <span />
       </div>
       <div>
-        <strong>APRÒLIS</strong>
+        <strong>AESTIMA</strong>
         <small>PARTS FINDER</small>
       </div>
     </div>
