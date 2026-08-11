@@ -160,41 +160,40 @@ export default function ExplodedView() {
           <h2>Esplosi catalogo</h2>
           <p>Clicca un pallino numerato per aprire il ricambio corrispondente.</p>
         </div>
-        <label className="exploded-catalog-filter">
-          <span>Macchina</span>
-          <select
-            value={catalogFilter}
-            onChange={(event) => setCatalogFilter(event.target.value)}
-          >
-            <option value="">Tutte</option>
-            {catalogs.map((name) => (
-              <option key={name} value={name}>
-                {name}
-              </option>
-            ))}
-          </select>
-        </label>
+        <div className="exploded-hero-filters">
+          <label className="exploded-catalog-filter">
+            <span>Macchina</span>
+            <select
+              value={catalogFilter}
+              onChange={(event) => setCatalogFilter(event.target.value)}
+            >
+              <option value="">Tutte</option>
+              {catalogs.map((name) => (
+                <option key={name} value={name}>
+                  {name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="exploded-catalog-filter exploded-table-filter">
+            <span>Tavola</span>
+            <select
+              value={selectedKey}
+              onChange={(event) => setSelectedKey(event.target.value)}
+              aria-label="Seleziona tavola esploso"
+            >
+              {visibleAssemblies.map((assembly) => (
+                <option key={assembly.key} value={assembly.key}>
+                  {assembly.title}
+                  {assembly.code ? ` · ${assembly.code}` : ''} · pag. {assembly.page}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
       </div>
 
       <div className="exploded-layout">
-        <aside className="exploded-assembly-list" aria-label="Tavole esploso">
-          {visibleAssemblies.map((assembly) => (
-            <button
-              key={assembly.key}
-              type="button"
-              className={assembly.key === selectedKey ? 'active' : ''}
-              onClick={() => setSelectedKey(assembly.key)}
-            >
-              <strong>{assembly.title}</strong>
-              <span>
-                {assembly.catalogName} · pag. {assembly.page}
-                {assembly.code ? ` · ${assembly.code}` : ''}
-              </span>
-              <small>{assembly.parts.length} ricambi</small>
-            </button>
-          ))}
-        </aside>
-
         <section className="exploded-stage">
           <div className="exploded-toolbar">
             <button

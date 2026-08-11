@@ -1753,8 +1753,21 @@ button {
   padding: 28px clamp(18px, 3vw, 36px) 30px;
 }
 
+.exploded-hero-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
 .exploded-catalog-filter {
   min-width: 180px;
+}
+
+.exploded-table-filter {
+  min-width: min(320px, 70vw);
+  flex: 1 1 260px;
 }
 
 .exploded-catalog-filter span {
@@ -1779,46 +1792,9 @@ button {
 
 .exploded-layout {
   display: grid;
-  grid-template-columns: minmax(180px, 220px) minmax(0, 1fr) minmax(220px, 260px);
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 260px);
   gap: 14px;
   min-height: 620px;
-}
-
-.exploded-assembly-list {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  max-height: 720px;
-  overflow: auto;
-  padding-right: 2px;
-}
-
-.exploded-assembly-list button {
-  display: grid;
-  gap: 2px;
-  width: 100%;
-  padding: 10px 11px;
-  text-align: left;
-  color: #3d536a;
-  background: white;
-  border: 1px solid #dce5ee;
-  border-radius: 10px;
-}
-
-.exploded-assembly-list button.active {
-  color: var(--blue-900);
-  background: var(--blue-50);
-  border-color: #bfd8f2;
-}
-
-.exploded-assembly-list strong {
-  font-size: 12px;
-}
-
-.exploded-assembly-list span,
-.exploded-assembly-list small {
-  color: #7a8b9e;
-  font-size: 10px;
 }
 
 .exploded-stage {
@@ -2091,10 +2067,8 @@ button {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .exploded-assembly-list {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-    max-height: none;
+  .exploded-hero-filters {
+    width: 100%;
   }
 
   .exploded-part-panel {
