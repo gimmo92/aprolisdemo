@@ -48,7 +48,68 @@ const initialMessage: Message = {
   id: 1,
   sender: 'assistant',
   eyebrow: 'Assistente ricambi',
-  text: 'Buongiorno! Inserisci il numero di matricola del mezzo. Individuerò il catalogo corretto prima di cercare il ricambio.',
+  text: 'Buongiorno! Indica la matricola, il modello (es. T135) o il nome del catalogo. Poi cerca il ricambio, anche nella stessa frase.',
+}
+
+const LOOKUP_STOPWORDS = new Set([
+  'macchina',
+  'mezzo',
+  'catalogo',
+  'modello',
+  'matricola',
+  'dammi',
+  'tutti',
+  'tutte',
+  'della',
+  'delle',
+  'del',
+  'dei',
+  'degli',
+  'dello',
+  'di',
+  'la',
+  'il',
+  'lo',
+  'le',
+  'i',
+  'un',
+  'una',
+  'per',
+  'con',
+  'su',
+  'nel',
+  'nella',
+  'trova',
+  'cerca',
+  'ricambi',
+  'ricambio',
+  'vorrei',
+  'voglio',
+  'mostra',
+  'elenca',
+])
+
+function residualSearchQuery(raw: string, matchedLabel: string) {
+  const labelTokens = matchedLabel
+    .toLocaleLowerCase('it')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .split(/[^a-z0-9]+/)
+    .filter((token) => token.length >= 2)
+
+  const kept = raw
+    .toLocaleLowerCase('it')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .split(/[^a-z0-9]+/)
+    .filter(
+      (token) =>
+        token.length >= 2 &&
+        !LOOKUP_STOPWORDS.has(token) &&
+        !labelTokens.includes(token),
+    )
+
+  return kept.join(' ').trim()
 }
 
 function BrandMark() {
@@ -183,7 +244,7 @@ function App() {
 
   const placeholder =
     phase === 'serial'
-      ? 'Es. 13510073'
+      ? 'Es. 13510073, T135, oppure “sensori T135”'
       : 'Descrivi il ricambio, es. “fusibile 500A”'
 
   useEffect(() => {
@@ -204,50 +265,24 @@ function App() {
     ])
   }
 
-  const handleSerial = async (value: string) => {
-    const cleanSerial = value.replace(/\D/g, '')
-    addMessage({ sender: 'user', text: value })
-    setIsThinking(true)
-
-    try {
-      const identifiedCatalog = await identifyCatalog(cleanSerial)
-      setSelectedSerial(cleanSerial)
-      setPhase('search')
-      addMessage({
-        sender: 'assistant',
-        eyebrow: 'Catalogo individuato',
-        text: `Perfetto. Ho associato la matricola ${cleanSerial} al ${identifiedCatalog.version} (${identifiedCatalog.orderReference}). Quale ricambio stai cercando?`,
-      })
-    } catch (error) {
-      const message =
-        error instanceof ApiError && error.status === 404
-          ? `Non trovo la matricola ${value} nei cataloghi indicizzati. Prova con 13510073 o 13510074.`
-          : error instanceof Error
-            ? error.message
-            : 'Non riesco a verificare la matricola in questo momento.'
-      addMessage({
-        sender: 'assistant',
-        eyebrow: 'Matricola non verificata',
-        text: message,
-      })
-    } finally {
-      setIsThinking(false)
-    }
-  }
-
-  const handleSearch = async (value: string) => {
-    if (!selectedSerial) return
+  const runPartsSearch = async (
+    serial: string,
+    value: string,
+    options?: { skipUserMessage?: boolean },
+  ) => {
     const history: ChatHistoryItem[] = messages
       .slice(-6)
       .map((message) => ({
         role: message.sender === 'user' ? 'user' : 'assistant',
         content: message.text,
       }))
-    addMessage({ sender: 'user', text: value })
+    if (!options?.skipUserMessage) {
+      addMessage({ sender: 'user', text: value })
+    }
     setIsThinking(true)
 
     try {
-      const result = await askPartsAssistant(selectedSerial, value, history)
+      const result = await askPartsAssistant(serial, value, history)
       if (result.parts.length) {
         addMessage({
           sender: 'assistant',
@@ -276,6 +311,63 @@ function App() {
     } finally {
       setIsThinking(false)
     }
+  }
+
+  const handleSerial = async (value: string) => {
+    addMessage({ sender: 'user', text: value })
+    setIsThinking(true)
+
+    try {
+      const lookup = await identifyCatalog(value)
+      setSelectedSerial(lookup.serial)
+      setPhase('search')
+
+      const how =
+        lookup.resolvedBy === 'serial'
+          ? `matricola ${lookup.serial}`
+          : lookup.resolvedBy === 'model'
+            ? `modello ${lookup.matchedLabel}`
+            : `catalogo ${lookup.matchedLabel}`
+      const residual = residualSearchQuery(value, lookup.matchedLabel)
+
+      if (residual.length >= 3) {
+        addMessage({
+          sender: 'assistant',
+          eyebrow: 'Catalogo individuato',
+          text: `Ok, uso ${how} (${lookup.catalog.version}). Cerco: “${residual}”.`,
+        })
+        setIsThinking(false)
+        await runPartsSearch(lookup.serial, residual, { skipUserMessage: true })
+        return
+      }
+
+      addMessage({
+        sender: 'assistant',
+        eyebrow: 'Catalogo individuato',
+        text: `Perfetto. Ho associato ${how} al catalogo ${lookup.catalog.version}${
+          lookup.catalog.orderReference ? ` (${lookup.catalog.orderReference})` : ''
+        }. Quale ricambio stai cercando?`,
+      })
+    } catch (error) {
+      const message =
+        error instanceof ApiError && error.status === 404
+          ? `Non trovo matricola, macchina o catalogo per “${value}”. Prova con 13510073, T135 o il nome del catalogo.`
+          : error instanceof Error
+            ? error.message
+            : 'Non riesco a individuare il catalogo in questo momento.'
+      addMessage({
+        sender: 'assistant',
+        eyebrow: 'Catalogo non individuato',
+        text: message,
+      })
+    } finally {
+      setIsThinking(false)
+    }
+  }
+
+  const handleSearch = async (value: string) => {
+    if (!selectedSerial) return
+    await runPartsSearch(selectedSerial, value)
   }
 
   const submit = (event: FormEvent) => {

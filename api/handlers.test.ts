@@ -38,14 +38,14 @@ afterEach(() => {
 })
 
 describe('API handlers', () => {
-  it('returns catalog metadata for a known serial', () => {
+  it('returns catalog metadata for a known serial', async () => {
     const { response, result } = mockResponse()
     const request = {
       method: 'GET',
       query: { serial: '13510073' },
     } as unknown as VercelRequest
 
-    catalogHandler(request, response)
+    await catalogHandler(request, response)
 
     expect(result.statusCode).toBe(200)
     expect(result.body).toMatchObject({
@@ -53,6 +53,24 @@ describe('API handlers', () => {
         model: 'T135',
         partCount: expect.any(Number),
       },
+      serial: '13510073',
+      resolvedBy: 'serial',
+    })
+  })
+
+  it('returns catalog metadata for a machine name query', async () => {
+    const { response, result } = mockResponse()
+    const request = {
+      method: 'GET',
+      query: { q: 'sensori macchina t135' },
+    } as unknown as VercelRequest
+
+    await catalogHandler(request, response)
+
+    expect(result.statusCode).toBe(200)
+    expect(result.body).toMatchObject({
+      catalog: { model: 'T135' },
+      resolvedBy: 'model',
     })
   })
 

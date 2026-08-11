@@ -1,13 +1,14 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { z } from 'zod'
 import {
+  findLocalCatalogByLookup,
   getAllBundledParts,
   getIndexStats,
   getPublicCatalog,
 } from './lib/retrieval.js'
 import {
   createSignedPdfUrl,
-  findSupabaseCatalog,
+  findSupabaseCatalogByLookup,
 } from './lib/supabase-retrieval.js'
 import { getSupabaseAdmin, isSupabaseConfigured } from './lib/supabase.js'
 
@@ -46,8 +47,14 @@ export default async function handler(
 
   response.setHeader('Cache-Control', 'public, max-age=60, s-maxage=300')
 
-  const serial = typeof request.query.serial === 'string' ? request.query.serial : ''
-  if (!serial) {
+  const lookup =
+    typeof request.query.q === 'string'
+      ? request.query.q
+      : typeof request.query.serial === 'string'
+        ? request.query.serial
+        : ''
+
+  if (!lookup.trim()) {
     if (isSupabaseConfigured()) {
       const supabase = getSupabaseAdmin()
       const [{ data: readyCatalogs }, { data: serials }] = await Promise.all([
@@ -82,15 +89,32 @@ export default async function handler(
     return response.status(200).json({ stats: getIndexStats() })
   }
 
-  let catalog = isSupabaseConfigured()
-    ? (await findSupabaseCatalog(serial))?.catalog
+  const remote = isSupabaseConfigured()
+    ? await findSupabaseCatalogByLookup(lookup)
     : undefined
-  catalog ||= getPublicCatalog(serial)
-  if (!catalog) {
-    return response.status(404).json({
-      error: 'Matricola non presente nei cataloghi indicizzati.',
+  const local = findLocalCatalogByLookup(lookup)
+  const match = remote || local
+  if (!match) {
+    // Keep exact serial lookup fallback for older clients.
+    const catalog = getPublicCatalog(lookup.replace(/\D/g, ''))
+    if (!catalog) {
+      return response.status(404).json({
+        error:
+          'Matricola, macchina o catalogo non presenti negli indici disponibili.',
+      })
+    }
+    return response.status(200).json({
+      catalog,
+      serial: catalog.serialNumbers[0],
+      resolvedBy: 'serial',
+      matchedLabel: `${catalog.brand} ${catalog.model}`,
     })
   }
 
-  return response.status(200).json({ catalog })
+  return response.status(200).json({
+    catalog: match.catalog,
+    serial: match.serial,
+    resolvedBy: match.resolvedBy,
+    matchedLabel: match.matchedLabel,
+  })
 }

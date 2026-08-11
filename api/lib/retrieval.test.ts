@@ -16,6 +16,16 @@ describe('catalog retrieval', () => {
     expect(findCatalog('99999999')).toBeUndefined()
   })
 
+  it('resolves catalogs by machine or catalog name', async () => {
+    const { findLocalCatalogByLookup } = await import('./retrieval.js')
+    expect(findLocalCatalogByLookup('T135')?.catalog.model).toBe('T135')
+    expect(
+      findLocalCatalogByLookup('dammi tutti i sensori della macchina t135')
+        ?.resolvedBy,
+    ).toBe('model')
+    expect(findLocalCatalogByLookup('charlatte')?.catalog.brand).toMatch(/Charlatte/i)
+  })
+
   it('exposes metadata without the full parts array', () => {
     const catalog = getPublicCatalog('13510073')
     expect(catalog?.partCount).toBeGreaterThan(550)

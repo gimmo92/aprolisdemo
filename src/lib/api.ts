@@ -135,11 +135,17 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   }
 }
 
-export async function identifyCatalog(serial: string) {
-  const response = await apiFetch<{ catalog: CatalogInfo }>(
-    `/api/catalog?serial=${encodeURIComponent(serial)}`,
+export type CatalogLookupResponse = {
+  catalog: CatalogInfo
+  serial: string
+  resolvedBy: 'serial' | 'model' | 'name'
+  matchedLabel: string
+}
+
+export async function identifyCatalog(query: string) {
+  return apiFetch<CatalogLookupResponse>(
+    `/api/catalog?q=${encodeURIComponent(query)}`,
   )
-  return response.catalog
 }
 
 export function getIndexedParts(serial?: string) {

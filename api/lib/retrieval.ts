@@ -98,9 +98,7 @@ export function findCatalog(serial: string) {
   return catalogs.find((catalog) => catalog.serialNumbers.includes(normalizedSerial))
 }
 
-export function getPublicCatalog(serial: string): PublicCatalog | undefined {
-  const catalog = findCatalog(serial)
-  if (!catalog) return undefined
+function toPublicCatalog(catalog: IndexedCatalog): PublicCatalog {
   return {
     id: catalog.id,
     brand: catalog.brand,
@@ -112,6 +110,110 @@ export function getPublicCatalog(serial: string): PublicCatalog | undefined {
     documentName: catalog.documentName,
     documentPages: catalog.documentPages,
     partCount: catalog.partCount,
+  }
+}
+
+export function getPublicCatalog(serial: string): PublicCatalog | undefined {
+  const catalog = findCatalog(serial)
+  if (!catalog) return undefined
+  return toPublicCatalog(catalog)
+}
+
+export type CatalogLookupResult = {
+  catalog: PublicCatalog
+  serial: string
+  resolvedBy: 'serial' | 'model' | 'name'
+  matchedLabel: string
+}
+
+function catalogMatchScore(
+  query: string,
+  fields: {
+    brand?: string
+    model?: string
+    version?: string
+    documentName?: string
+    orderReference?: string
+    customer?: string
+  },
+) {
+  const tokens = normalize(query)
+    .split(' ')
+    .filter((token) => token.length >= 2)
+  if (!tokens.length) return 0
+
+  const model = normalize(fields.model || '')
+  const brand = normalize(fields.brand || '')
+  const version = normalize(fields.version || '')
+  const documentName = normalize(fields.documentName || '')
+  const orderReference = normalize(fields.orderReference || '')
+  const customer = normalize(fields.customer || '')
+  const haystack = [brand, model, version, documentName, orderReference, customer]
+    .filter(Boolean)
+    .join(' ')
+
+  let score = 0
+  for (const token of tokens) {
+    if (model && (model === token || model.includes(token) || token.includes(model))) {
+      score += model === token ? 120 : 70
+    }
+    if (brand && (brand === token || brand.includes(token))) score += 35
+    if (version && version.includes(token)) score += 25
+    if (documentName && documentName.includes(token)) score += 30
+    if (orderReference && orderReference.includes(token)) score += 20
+    if (customer && customer.includes(token)) score += 10
+    if (haystack.includes(token)) score += 5
+  }
+  return score
+}
+
+export function findLocalCatalogByLookup(
+  query: string,
+): CatalogLookupResult | undefined {
+  const digits = query.replace(/\D/g, '')
+  if (digits.length >= 4) {
+    const bySerial = findCatalog(digits)
+    if (bySerial) {
+      return {
+        catalog: toPublicCatalog(bySerial),
+        serial: digits,
+        resolvedBy: 'serial',
+        matchedLabel: `${bySerial.brand} ${bySerial.model}`,
+      }
+    }
+  }
+
+  const ranked = catalogs
+    .map((catalog) => {
+      const score = catalogMatchScore(query, catalog)
+      const resolvedBy: 'model' | 'name' = normalize(query)
+        .split(' ')
+        .some((token) => {
+          const model = normalize(catalog.model)
+          return (
+            model &&
+            (model === token || token.includes(model) || model.includes(token))
+          )
+        })
+        ? 'model'
+        : 'name'
+      return { catalog, score, resolvedBy }
+    })
+    .filter((entry) => entry.score > 0)
+    .sort((left, right) => right.score - left.score)
+
+  const best = ranked[0]
+  const uniqueTop =
+    best &&
+    (best.score >= 60 ||
+      (best.score >= 30 &&
+        ranked.filter((entry) => entry.score === best.score).length === 1))
+  if (!uniqueTop || !best?.catalog.serialNumbers[0]) return undefined
+  return {
+    catalog: toPublicCatalog(best.catalog),
+    serial: best.catalog.serialNumbers[0],
+    resolvedBy: best.resolvedBy,
+    matchedLabel: `${best.catalog.brand} ${best.catalog.model}`,
   }
 }
 

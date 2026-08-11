@@ -102,6 +102,134 @@ export async function findSupabaseCatalog(serial: string) {
   }
 }
 
+function normalizeLookup(value: string) {
+  return value
+    .toLocaleLowerCase('it')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+}
+
+function scoreSupabaseCatalog(query: string, catalog: CatalogRow) {
+  const tokens = normalizeLookup(query)
+    .split(' ')
+    .filter((token) => token.length >= 2)
+  if (!tokens.length) return 0
+  const model = normalizeLookup(catalog.model || '')
+  const brand = normalizeLookup(catalog.brand || '')
+  const version = normalizeLookup(catalog.version || '')
+  const documentName = normalizeLookup(catalog.original_filename || '')
+  const orderReference = normalizeLookup(catalog.order_reference || '')
+  const customer = normalizeLookup(catalog.customer || '')
+  let score = 0
+  for (const token of tokens) {
+    if (model && (model === token || model.includes(token) || token.includes(model))) {
+      score += model === token ? 120 : 70
+    }
+    if (brand && (brand === token || brand.includes(token))) score += 35
+    if (version && version.includes(token)) score += 25
+    if (documentName && documentName.includes(token)) score += 30
+    if (orderReference && orderReference.includes(token)) score += 20
+    if (customer && customer.includes(token)) score += 10
+  }
+  return score
+}
+
+export type SupabaseCatalogLookup = {
+  catalog: PublicCatalog
+  serial: string
+  resolvedBy: 'serial' | 'model' | 'name'
+  matchedLabel: string
+  storagePath: string
+}
+
+export async function findSupabaseCatalogByLookup(
+  query: string,
+): Promise<SupabaseCatalogLookup | undefined> {
+  if (!isSupabaseConfigured()) return undefined
+
+  const digits = query.replace(/\D/g, '')
+  if (digits.length >= 4) {
+    const bySerial = await findSupabaseCatalog(digits)
+    if (bySerial) {
+      return {
+        catalog: bySerial.catalog,
+        serial: digits,
+        resolvedBy: 'serial',
+        matchedLabel: `${bySerial.catalog.brand} ${bySerial.catalog.model}`,
+        storagePath: bySerial.storagePath,
+      }
+    }
+  }
+
+  const alphanumeric = query.replace(/[^A-Za-z0-9]/g, '').toUpperCase()
+  if (alphanumeric.length >= 4 && alphanumeric !== digits) {
+    const bySerial = await findSupabaseCatalog(alphanumeric)
+    if (bySerial) {
+      return {
+        catalog: bySerial.catalog,
+        serial: alphanumeric,
+        resolvedBy: 'serial',
+        matchedLabel: `${bySerial.catalog.brand} ${bySerial.catalog.model}`,
+        storagePath: bySerial.storagePath,
+      }
+    }
+  }
+
+  const supabase = getSupabaseAdmin()
+  const { data: catalogs, error } = await supabase
+    .from('catalogs')
+    .select(
+      'id, brand, model, version, customer, order_reference, storage_path, original_filename, page_count, part_count',
+    )
+    .eq('status', 'ready')
+  if (error) throw error
+  if (!catalogs?.length) return undefined
+
+  const ranked = (catalogs as CatalogRow[])
+    .map((catalog) => {
+      const score = scoreSupabaseCatalog(query, catalog)
+      const model = normalizeLookup(catalog.model || '')
+      const resolvedBy: 'model' | 'name' = normalizeLookup(query)
+        .split(' ')
+        .some(
+          (token) =>
+            model &&
+            (model === token || token.includes(model) || model.includes(token)),
+        )
+        ? 'model'
+        : 'name'
+      return { catalog, score, resolvedBy }
+    })
+    .filter((entry) => entry.score > 0)
+    .sort((left, right) => right.score - left.score)
+
+  const best = ranked[0]
+  const uniqueTop =
+    best &&
+    (best.score >= 60 ||
+      (best.score >= 30 &&
+        ranked.filter((entry) => entry.score === best.score).length === 1))
+  if (!uniqueTop || !best) return undefined
+
+  const { data: serials } = await supabase
+    .from('catalog_serials')
+    .select('serial_number')
+    .eq('catalog_id', best.catalog.id)
+  const serialList = (serials || []).map((row) => row.serial_number)
+  const serial = serialList[0]
+  if (!serial) return undefined
+
+  return {
+    catalog: mapCatalog(best.catalog, serialList),
+    serial,
+    resolvedBy: best.resolvedBy,
+    matchedLabel: `${best.catalog.brand} ${best.catalog.model}`,
+    storagePath: best.catalog.storage_path,
+  }
+}
+
 export async function searchSupabaseParts(
   serial: string,
   query: string,
