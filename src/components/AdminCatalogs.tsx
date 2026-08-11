@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import * as tus from 'tus-js-client'
 import {
@@ -147,6 +147,39 @@ async function readApiPayload(response: Response): Promise<ApiPayload> {
   }
 }
 
+async function validAdminSession(forceRefresh = false) {
+  if (!supabase) throw new Error('Supabase non configurato.')
+  const current = await supabase.auth.getSession()
+  let active = current.data.session
+  const expiresSoon =
+    !active?.expires_at || active.expires_at * 1000 <= Date.now() + 90_000
+  if (forceRefresh || expiresSoon) {
+    const refreshed = await supabase.auth.refreshSession()
+    if (refreshed.error || !refreshed.data.session) {
+      throw new Error('Sessione scaduta. Accedi nuovamente.')
+    }
+    active = refreshed.data.session
+  }
+  if (!active) throw new Error('Sessione scaduta. Accedi nuovamente.')
+  return active
+}
+
+async function authenticatedFetch(input: RequestInfo | URL, init: RequestInit = {}) {
+  const execute = async (forceRefresh: boolean) => {
+    const active = await validAdminSession(forceRefresh)
+    return fetch(input, {
+      ...init,
+      headers: {
+        'Content-Type': 'application/json',
+        ...init.headers,
+        Authorization: `Bearer ${active.access_token}`,
+      },
+    })
+  }
+  const response = await execute(false)
+  return response.status === 401 ? execute(true) : response
+}
+
 export function AdminCatalogs() {
   const [session, setSession] = useState<Session | null>(null)
   const [role, setRole] = useState<string>()
@@ -176,30 +209,26 @@ export function AdminCatalogs() {
     return () => data.subscription.unsubscribe()
   }, [])
 
-  const authHeaders = useMemo(
-    () =>
-      session
-        ? {
-            Authorization: `Bearer ${session.access_token}`,
-            'Content-Type': 'application/json',
-          }
-        : undefined,
-    [session],
-  )
-
   const refresh = useCallback(async () => {
-    if (!supabase || !session || !authHeaders) return
-    const { data } = await supabase
-      .from('profiles')
-      .select('role')
-      .eq('id', session.user.id)
-      .single()
-    setRole(data?.role)
-    if (data?.role !== 'admin') return
-    const response = await fetch('/api/admin/catalogs', { headers: authHeaders })
-    const payload = await readApiPayload(response)
-    if (response.ok) setCatalogs(payload.catalogs || [])
-  }, [authHeaders, session])
+    if (!supabase || !session) return
+    try {
+      const active = await validAdminSession()
+      const { data } = await supabase
+        .from('profiles')
+        .select('role')
+        .eq('id', active.user.id)
+        .single()
+      setRole(data?.role)
+      if (data?.role !== 'admin') return
+      const response = await authenticatedFetch('/api/admin/catalogs')
+      const payload = await readApiPayload(response)
+      if (response.ok) setCatalogs(payload.catalogs || [])
+    } catch (error) {
+      setMessage(
+        error instanceof Error ? error.message : 'Sessione non disponibile.',
+      )
+    }
+  }, [session])
 
   useEffect(() => {
     void refresh()
@@ -226,7 +255,7 @@ export function AdminCatalogs() {
 
   function uploadTus(selectedFile: File, objectName: string) {
     return new Promise<void>((resolve, reject) => {
-      if (!supabaseUrl || !supabasePublishableKey || !session) {
+      if (!supabaseUrl || !supabasePublishableKey) {
         reject(new Error('Supabase non configurato.'))
         return
       }
@@ -237,9 +266,12 @@ export function AdminCatalogs() {
         removeFingerprintOnSuccess: true,
         uploadDataDuringCreation: true,
         headers: {
-          authorization: `Bearer ${session.access_token}`,
           apikey: supabasePublishableKey,
           'x-upsert': 'false',
+        },
+        onBeforeRequest: async (request) => {
+          const active = await validAdminSession()
+          request.setHeader('authorization', `Bearer ${active.access_token}`)
         },
         metadata: {
           bucketName: 'catalogs',
@@ -262,9 +294,8 @@ export function AdminCatalogs() {
   async function runIndexing(catalogId: string, jobId: string) {
     let latest: ApiPayload = {}
     for (let pass = 1; pass <= 50; pass += 1) {
-      const response = await fetch('/api/index_catalog', {
+      const response = await authenticatedFetch('/api/index_catalog', {
         method: 'POST',
-        headers: authHeaders,
         body: JSON.stringify({ catalogId, jobId }),
       })
       latest = await readApiPayload(response)
@@ -283,7 +314,7 @@ export function AdminCatalogs() {
 
   async function submitCatalog(event: React.FormEvent) {
     event.preventDefault()
-    if (!file || !session || !authHeaders) return
+    if (!file || !session) return
     if (file.type !== 'application/pdf' || file.size === 0) {
       setMessage('Seleziona un PDF valido e non vuoto.')
       return
@@ -296,13 +327,13 @@ export function AdminCatalogs() {
     setMessage('Caricamento PDF in corso…')
     setProgress(0)
     const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_')
-    const storagePath = `${session.user.id}/${crypto.randomUUID()}-${safeName}`
     try {
+      const active = await validAdminSession()
+      const storagePath = `${active.user.id}/${crypto.randomUUID()}-${safeName}`
       await uploadTus(file, storagePath)
       setMessage('Registrazione catalogo…')
-      const createResponse = await fetch('/api/admin/catalogs', {
+      const createResponse = await authenticatedFetch('/api/admin/catalogs', {
         method: 'POST',
-        headers: authHeaders,
         body: JSON.stringify({
           storagePath,
           originalFilename: file.name,
@@ -332,11 +363,11 @@ export function AdminCatalogs() {
   }
 
   async function removeCatalog(catalog: AdminCatalog) {
-    if (!authHeaders || !window.confirm(`Eliminare ${catalog.original_filename}?`)) return
+    if (!session || !window.confirm(`Eliminare ${catalog.original_filename}?`)) return
     setBusy(true)
-    const response = await fetch(
+    const response = await authenticatedFetch(
       `/api/admin/catalogs?catalogId=${encodeURIComponent(catalog.id)}`,
-      { method: 'DELETE', headers: authHeaders },
+      { method: 'DELETE' },
     )
     const payload = await readApiPayload(response)
     setMessage(
@@ -352,7 +383,7 @@ export function AdminCatalogs() {
     const retryableJob = catalog.ingestion_jobs?.find((job) =>
       ['failed', 'completed'].includes(job.status) || isStaleJob(job),
     )
-    if (!retryableJob || !authHeaders) return
+    if (!retryableJob || !session) return
     setBusy(true)
     setMessage(`Nuova indicizzazione di ${catalog.original_filename}…`)
     try {
@@ -376,15 +407,14 @@ export function AdminCatalogs() {
 
   async function approveCatalog(catalog: AdminCatalog) {
     if (
-      !authHeaders ||
+      !session ||
       !window.confirm(
         `Confermi di aver verificato ${catalog.original_filename} e di volerlo rendere operativo?`,
       )
     ) return
     setBusy(true)
-    const response = await fetch('/api/admin/catalogs', {
+    const response = await authenticatedFetch('/api/admin/catalogs', {
       method: 'PATCH',
-      headers: authHeaders,
       body: JSON.stringify({ action: 'approve', catalogId: catalog.id }),
     })
     const payload = await readApiPayload(response)
