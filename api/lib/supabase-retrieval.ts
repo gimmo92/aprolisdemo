@@ -214,21 +214,42 @@ export async function getAllReadySupabaseParts() {
   }
 }
 
-export async function createSignedPdfUrl(catalogId: string, expiresIn = 300) {
-  if (!isSupabaseConfigured()) return undefined
-  const supabase = getSupabaseAdmin()
-  const { data: catalog, error } = await supabase
-    .from('catalogs')
-    .select('storage_path')
-    .eq('id', catalogId)
-    .eq('status', 'ready')
-    .single()
-
-  if (error || !catalog) return undefined
-  const { data, error: signError } = await supabase.storage
-    .from('catalogs')
-    .createSignedUrl(catalog.storage_path, expiresIn)
-  if (signError) throw signError
-  return data.signedUrl
+export async function findExplodedViewIds(
+  catalogId: string,
+  figureCodes: string[],
+) {
+  if (!isSupabaseConfigured() || !figureCodes.length) return new Map<string, string>()
+  const { data, error } = await getSupabaseAdmin()
+    .from('exploded_views')
+    .select('id, figure_code')
+    .eq('catalog_id', catalogId)
+    .in('figure_code', [...new Set(figureCodes)])
+  if (error) {
+    if (error.code === '42P01' || error.code === 'PGRST205') {
+      const { data: catalog } = await getSupabaseAdmin()
+        .from('catalogs')
+        .select('metadata')
+        .eq('id', catalogId)
+        .maybeSingle()
+      const metadata =
+        catalog?.metadata && typeof catalog.metadata === 'object'
+          ? (catalog.metadata as { explodedViews?: unknown })
+          : undefined
+      const views = Array.isArray(metadata?.explodedViews)
+        ? metadata.explodedViews
+        : []
+      return new Map(
+        views.flatMap((view) => {
+          if (!view || typeof view !== 'object') return []
+          const row = view as { id?: unknown; figure_code?: unknown }
+          return typeof row.id === 'string' && typeof row.figure_code === 'string'
+            ? [[row.figure_code, row.id] as const]
+            : []
+        }),
+      )
+    }
+    throw error
+  }
+  return new Map((data || []).map((view) => [view.figure_code, view.id]))
 }
 

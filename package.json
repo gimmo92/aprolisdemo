@@ -8,7 +8,7 @@
     "dev:web": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "test": "vitest run",
+    "test": "vitest run && python3 -m unittest discover -s tests -p 'test_*.py'",
     "index:catalogs": "python scripts/index_catalogs.py",
     "import:supabase": "node scripts/import_catalog_index.mjs",
     "preview": "vite preview"

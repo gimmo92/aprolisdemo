@@ -48,6 +48,39 @@ export type PartsIndexResponse = {
   }
 }
 
+export type ExplodedCallout = {
+  id: string
+  label: string
+  items: string[]
+  x: number
+  y: number
+  tipX: number
+  tipY: number
+  traced: boolean
+}
+
+export type ExplodedViewSummary = {
+  id: string
+  catalogId: string
+  machine: string
+  figureCode: string
+  title: string
+  pageIndex: number
+  partsPages: number[]
+  assetType: 'svg' | 'png'
+  viewW: number
+  viewH: number
+  traceRate: number
+}
+
+export type ExplodedViewResponse = {
+  view: ExplodedViewSummary
+  svg?: string
+  imageUrl?: string
+  callouts: ExplodedCallout[]
+  parts: CatalogPart[]
+}
+
 type ChatResponse = {
   answer: string
   parts: Part[]
@@ -114,6 +147,16 @@ export function getIndexedParts(serial?: string) {
     serial
       ? `/api/parts?serial=${encodeURIComponent(serial)}`
       : '/api/parts?scope=all',
+  )
+}
+
+export function getExplodedViews() {
+  return apiFetch<{ views: ExplodedViewSummary[] }>('/api/exploded')
+}
+
+export function getExplodedView(viewId: string) {
+  return apiFetch<ExplodedViewResponse>(
+    `/api/exploded?viewId=${encodeURIComponent(viewId)}`,
   )
 }
 

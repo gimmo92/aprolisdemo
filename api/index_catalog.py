@@ -20,9 +20,21 @@ from urllib.request import Request, urlopen
 import pymupdf as fitz
 
 try:
-    from .indexing import ExtractedPart, PageExtraction, select_adapter
+    from .indexing import (
+        ExtractedPart,
+        PageExtraction,
+        asset_rows,
+        extract_exploded_assets,
+        select_adapter,
+    )
 except ImportError:  # Allows local loading from inside the api directory.
-    from indexing import ExtractedPart, PageExtraction, select_adapter
+    from indexing import (
+        ExtractedPart,
+        PageExtraction,
+        asset_rows,
+        extract_exploded_assets,
+        select_adapter,
+    )
 
 
 DEFAULT_MAX_PDF_BYTES = 250 * 1024 * 1024
@@ -314,6 +326,128 @@ class SupabaseREST:
                 "La sostituzione atomica dei ricambi ha restituito un valore inatteso.",
             )
         return value
+
+    def replace_catalog_exploded_views(
+        self,
+        catalog_id: str,
+        views: list[dict[str, Any]],
+        callouts: list[dict[str, Any]],
+    ) -> int:
+        _, _, data = self._call(
+            "POST",
+            "/rest/v1/rpc/replace_catalog_exploded_views",
+            body={
+                "p_catalog_id": catalog_id,
+                "p_views": views,
+                "p_callouts": callouts,
+            },
+            headers={
+                "Content-Profile": "public",
+                "Accept-Profile": "public",
+                "Prefer": "return=representation",
+            },
+        )
+        value = _decode_json(data, "PostgREST/replace_catalog_exploded_views")
+        if not isinstance(value, int):
+            raise IndexingError(
+                502,
+                "SUPABASE_INVALID_RESPONSE",
+                "La sostituzione degli esplosi ha restituito un valore inatteso.",
+            )
+        return value
+
+    def upload_private_object(
+        self,
+        bucket: str,
+        storage_path: str,
+        content: bytes,
+        content_type: str,
+        content_encoding: str | None = None,
+    ) -> None:
+        if (
+            not storage_path
+            or storage_path.startswith("/")
+            or any(part in {"", ".", ".."} for part in storage_path.split("/"))
+        ):
+            raise IndexingError(
+                422,
+                "INVALID_STORAGE_PATH",
+                "Percorso asset esploso non valido.",
+            )
+        headers = {
+            "apikey": self.service_key,
+            "Authorization": f"Bearer {self.service_key}",
+            "Content-Type": content_type,
+            "Cache-Control": "max-age=31536000",
+            "x-upsert": "true",
+        }
+        _ = content_encoding
+        path = (
+            f"/storage/v1/object/{quote(bucket, safe='')}/"
+            f"{quote(storage_path, safe='/')}"
+        )
+        request = Request(
+            f"{self.url}{path}",
+            data=content,
+            headers=headers,
+            method="POST",
+        )
+        try:
+            with urlopen(request, timeout=max(self.timeout, 60)) as response:
+                response.read()
+        except HTTPError as error:
+            details = error.read()[:500].decode("utf-8", "replace")
+            raise IndexingError(
+                502 if error.code >= 500 else error.code,
+                "EXPLODED_ASSET_UPLOAD_FAILED",
+                "Upload dell'asset esploso non riuscito.",
+                {"status": error.code, "response": details},
+            ) from error
+        except (URLError, TimeoutError) as error:
+            raise IndexingError(
+                502,
+                "EXPLODED_ASSET_UPLOAD_FAILED",
+                "Storage degli esplosi non raggiungibile.",
+                {"reason": str(error)},
+            ) from error
+
+    def ensure_private_asset_bucket(self, bucket: str) -> None:
+        try:
+            self._call(
+                "GET",
+                f"/storage/v1/bucket/{quote(bucket, safe='')}",
+            )
+            return
+        except IndexingError as error:
+            if error.status != 404:
+                raise
+        self._call(
+            "POST",
+            "/storage/v1/bucket",
+            body={
+                "id": bucket,
+                "name": bucket,
+                "public": False,
+                "file_size_limit": 20 * 1024 * 1024,
+                "allowed_mime_types": ["image/svg+xml", "image/png"],
+            },
+        )
+
+    def allow_assets_in_catalog_bucket(self, bucket: str) -> None:
+        self._call(
+            "PUT",
+            f"/storage/v1/bucket/{quote(bucket, safe='')}",
+            body={
+                "id": bucket,
+                "name": bucket,
+                "public": False,
+                "allowed_mime_types": [
+                    "application/pdf",
+                    "image/svg+xml",
+                    "image/png",
+                ],
+            },
+        )
 
     def download_private_object(self, bucket: str, storage_path: str) -> tuple[bytes, str]:
         if (
@@ -1346,11 +1480,17 @@ def _catalog_update(
 ) -> None:
     supported = set(catalog)
     payload = {key: value for key, value in values.items() if key in supported}
-    if "metadata" in supported and "report" in values:
-        metadata = catalog.get("metadata")
-        if not isinstance(metadata, dict):
-            metadata = {}
-        payload["metadata"] = {**metadata, "indexing": values["report"]}
+    if "metadata" in supported:
+        current_metadata = catalog.get("metadata")
+        if not isinstance(current_metadata, dict):
+            current_metadata = {}
+        next_metadata = values.get("metadata")
+        if not isinstance(next_metadata, dict):
+            next_metadata = {}
+        merged_metadata = {**current_metadata, **next_metadata}
+        if "report" in values:
+            merged_metadata["indexing"] = values["report"]
+        payload["metadata"] = merged_metadata
     client.patch("catalogs", {"id": f"eq.{catalog['id']}"}, payload)
 
 
@@ -1666,6 +1806,14 @@ def _run_indexing(
     _catalog_update(client, catalog, {"status": "processing"})
     content, downloaded_mime = client.download_private_object(bucket, storage_path)
     checksum, document = _validate_pdf(content, downloaded_mime, catalog)
+    exploded_views: list[dict[str, Any]] = []
+    exploded_callouts: list[dict[str, Any]] = []
+    exploded_uploads: list[dict[str, Any]] = []
+    exploded_setup_error: IndexingError | None = None
+    try:
+        client.select("exploded_views", {"select": "id", "limit": "1"})
+    except IndexingError as error:
+        exploded_setup_error = error
     try:
         detected_metadata = _detect_catalog_metadata(document, catalog)
         if detected_metadata.get("missing"):
@@ -1751,6 +1899,56 @@ def _run_indexing(
             },
         )
         parts, report, outcome = _extract(client, job, catalog, document, checksum)
+        if job.get("_preserve_ready") and parts:
+            outcome = "ready"
+            report["outcome"] = "ready"
+        if not report.get("remainingAiPages") or report.get("aiErrors"):
+            _job_update(
+                client,
+                job,
+                {
+                    "stage": "exploded_extraction",
+                    "progress": 90,
+                    "processed_items": 0,
+                    "total_items": len(parts),
+                },
+            )
+            machine = " ".join(
+                value
+                for value in (
+                    str(detected_metadata.get("brand") or _catalog_brand(catalog)).strip(),
+                    str(detected_metadata.get("model") or catalog.get("model") or "").strip(),
+                )
+                if value
+            ) or "Catalogo"
+            assets = extract_exploded_assets(
+                document,
+                parts,
+                catalog_id=str(catalog["id"]),
+                machine=machine,
+            )
+            exploded_views, exploded_callouts, exploded_uploads = asset_rows(
+                assets,
+                catalog_id=str(catalog["id"]),
+                checksum=checksum,
+            )
+            rates = [float(view["trace_rate"]) for view in exploded_views]
+            report["explodedViews"] = len(exploded_views)
+            report["interactiveExplodedViews"] = sum(
+                view["asset_type"] == "svg" for view in exploded_views
+            )
+            report["explodedTraceRate"] = (
+                round(sum(rates) / len(rates), 4) if rates else 0.0
+            )
+            report["explodedTraceRates"] = [
+                {
+                    "figureCode": view["figure_code"],
+                    "title": view["title"],
+                    "traceRate": view["trace_rate"],
+                    "assetType": view["asset_type"],
+                }
+                for view in exploded_views
+            ]
         page_count = document.page_count
     finally:
         document.close()
@@ -1765,6 +1963,90 @@ def _run_indexing(
     # Delete + insert run in one Postgres transaction. A bad row or transport
     # failure cannot leave a previously usable catalog partially replaced.
     accepted = client.replace_catalog_parts(str(catalog["id"]), rows)
+    exploded_metadata_views: list[dict[str, Any]] = []
+    if exploded_views:
+        exploded_bucket = os.environ.get(
+            "SUPABASE_EXPLODED_BUCKET", "exploded-views"
+        ).strip()
+        try:
+            asset_bucket = exploded_bucket
+            try:
+                client.ensure_private_asset_bucket(asset_bucket)
+                for upload in exploded_uploads:
+                    client.upload_private_object(
+                        asset_bucket,
+                        str(upload["path"]),
+                        bytes(upload["content"]),
+                        str(upload["content_type"]),
+                        None,
+                    )
+            except IndexingError:
+                # Some projects disallow creating additional buckets through
+                # Storage API. The existing private catalog bucket is always
+                # available, so use an isolated asset prefix there.
+                asset_bucket = bucket
+                asset_mime_fallback = False
+                try:
+                    client.allow_assets_in_catalog_bucket(asset_bucket)
+                except IndexingError:
+                    # Last-resort compatibility for projects that lock bucket
+                    # settings: Storage validates the declared MIME only. The
+                    # runtime API downloads and serves the actual SVG/PNG bytes.
+                    asset_mime_fallback = True
+                for upload in exploded_uploads:
+                    client.upload_private_object(
+                        asset_bucket,
+                        str(upload["path"]),
+                        bytes(upload["content"]),
+                        (
+                            "application/pdf"
+                            if asset_mime_fallback
+                            else str(upload["content_type"])
+                        ),
+                        None,
+                    )
+                if asset_mime_fallback:
+                    report["explodedAssetMimeFallback"] = True
+            report["explodedAssetBucket"] = asset_bucket
+            for view in exploded_views:
+                current_view_metadata = view.get("metadata")
+                if not isinstance(current_view_metadata, dict):
+                    current_view_metadata = {}
+                view["metadata"] = {
+                    **current_view_metadata,
+                    "assetBucket": asset_bucket,
+                }
+            if exploded_setup_error is None:
+                persisted_views = client.replace_catalog_exploded_views(
+                    str(catalog["id"]),
+                    exploded_views,
+                    exploded_callouts,
+                )
+                report["explodedStorage"] = "normalized_tables"
+            else:
+                callouts_by_view: dict[str, list[dict[str, Any]]] = {}
+                for callout in exploded_callouts:
+                    callouts_by_view.setdefault(
+                        str(callout["view_id"]), []
+                    ).append(callout)
+                exploded_metadata_views = [
+                    {
+                        **view,
+                        "callouts": callouts_by_view.get(str(view["id"]), []),
+                    }
+                    for view in exploded_views
+                ]
+                persisted_views = len(exploded_metadata_views)
+                report["explodedStorage"] = "catalog_metadata"
+            report["persistedExplodedViews"] = persisted_views
+        except IndexingError as error:
+            # Deploying code before migration 002 must not make the parts index
+            # unusable. The admin report makes the missing asset schema explicit.
+            report["explodedError"] = {
+                "code": error.code,
+                "message": error.message,
+                "details": error.details,
+            }
     job["progress"] = 95
     _job_update(
         client,
@@ -1788,6 +2070,20 @@ def _run_indexing(
         "processed_at": _utc_now(),
         "indexed_at": _utc_now(),
         "report": report,
+        **(
+            {
+                "metadata": {
+                    **(
+                        catalog.get("metadata")
+                        if isinstance(catalog.get("metadata"), dict)
+                        else {}
+                    ),
+                    "explodedViews": exploded_metadata_views,
+                }
+            }
+            if exploded_metadata_views
+            else {}
+        ),
     }
     _catalog_update(client, catalog, catalog_values)
 
@@ -1937,10 +2233,14 @@ class handler(BaseHTTPRequestHandler):
             retrying_review = (
                 status == "completed" and catalog.get("status") == "needs_review"
             )
+            rebuilding_ready = (
+                status == "completed" and catalog.get("status") == "ready"
+            )
             retrying_stale = status == "running" and _stale_running_job(job)
             if (
                 status not in {"queued", "failed"}
                 and not retrying_review
+                and not rebuilding_ready
                 and not retrying_stale
             ):
                 raise IndexingError(
@@ -1980,6 +2280,7 @@ class handler(BaseHTTPRequestHandler):
                     "Il job è già stato avviato da un altro processo.",
                 )
             job.update(locked[0])
+            job["_preserve_ready"] = rebuilding_ready
             claimed = True
             response, response_status = _run_indexing(client, job, catalog)
             response["elapsedSeconds"] = round(time.monotonic() - started, 3)

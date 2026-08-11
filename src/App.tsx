@@ -20,7 +20,9 @@ import {
 import { FormEvent, useEffect, useRef, useState } from 'react'
 import { catalog, exampleSearches, type Part } from './data/catalog'
 import PartsCatalog from './components/PartsCatalog'
-import ExplodedView from './components/ExplodedView'
+import ExplodedView, {
+  type ExplodedSelection,
+} from './components/ExplodedView'
 import { AdminCatalogs } from './components/AdminCatalogs'
 import {
   ApiError,
@@ -65,7 +67,13 @@ function BrandMark() {
   )
 }
 
-function PartCard({ part }: { part: Part }) {
+function PartCard({
+  part,
+  onOpenExploded,
+}: {
+  part: Part
+  onOpenExploded?: (part: Part) => void
+}) {
   return (
     <article className="part-card">
       <div className="part-card-top">
@@ -103,11 +111,27 @@ function PartCard({ part }: { part: Part }) {
           Catalogo T135 · pagina {part.page} di {catalog.documentPages}
         </span>
       </div>
+      {part.viewId && (
+        <button
+          type="button"
+          className="part-exploded-link"
+          onClick={() => onOpenExploded?.(part)}
+        >
+          <Layers size={15} />
+          Mostra sull’esploso
+        </button>
+      )}
     </article>
   )
 }
 
-function ChatMessage({ message }: { message: Message }) {
+function ChatMessage({
+  message,
+  onOpenExploded,
+}: {
+  message: Message
+  onOpenExploded?: (part: Part) => void
+}) {
   const isAssistant = message.sender === 'assistant'
 
   return (
@@ -131,7 +155,11 @@ function ChatMessage({ message }: { message: Message }) {
               <span>Ordinati per pertinenza</span>
             </div>
             {message.results.map((part) => (
-              <PartCard key={`${part.code}-${part.item}-${part.page}`} part={part} />
+              <PartCard
+                key={`${part.code}-${part.item}-${part.page}`}
+                part={part}
+                onOpenExploded={onOpenExploded}
+              />
             ))}
           </div>
         )}
@@ -148,6 +176,8 @@ function App() {
   const [messages, setMessages] = useState<Message[]>([initialMessage])
   const [isThinking, setIsThinking] = useState(false)
   const [indexedPartCount, setIndexedPartCount] = useState(585)
+  const [explodedSelection, setExplodedSelection] =
+    useState<ExplodedSelection>()
   const messageId = useRef(2)
   const scrollArea = useRef<HTMLDivElement>(null)
 
@@ -263,6 +293,7 @@ function App() {
     setSelectedSerial(undefined)
     setInput('')
     setIsThinking(false)
+    setExplodedSelection(undefined)
     messageId.current = 2
     setMessages([initialMessage])
   }
@@ -271,6 +302,12 @@ function App() {
     if (isThinking) return
     if (phase === 'serial') void handleSerial(value)
     else void handleSearch(value)
+  }
+
+  const openExplodedPart = (part: Part) => {
+    if (!part.viewId) return
+    setExplodedSelection({ viewId: part.viewId, item: part.item })
+    setActiveView('esplosi')
   }
 
   return (
@@ -366,7 +403,11 @@ function App() {
               <div className="chat-scroll" ref={scrollArea}>
                 <div className="conversation">
                   {messages.map((message) => (
-                    <ChatMessage key={message.id} message={message} />
+                    <ChatMessage
+                      key={message.id}
+                      message={message}
+                      onOpenExploded={openExplodedPart}
+                    />
                   ))}
                   {isThinking && (
                     <div className="message-row assistant">
@@ -417,7 +458,10 @@ function App() {
             </div>
           ) : activeView === 'esplosi' ? (
             <div className="catalog-scroll">
-              <ExplodedView />
+              <ExplodedView
+                selection={explodedSelection}
+                onSelectionChange={setExplodedSelection}
+              />
             </div>
           ) : (
             <div className="catalog-scroll admin-scroll">

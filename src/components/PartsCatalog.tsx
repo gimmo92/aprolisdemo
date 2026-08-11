@@ -245,7 +245,7 @@ export default function PartsCatalog({ serial }: Props) {
               <th>Qtà</th>
               <th>Pos.</th>
               <th>Tipo</th>
-              <th>Riferimento PDF</th>
+              <th>Tavola</th>
             </tr>
           </thead>
           <tbody>
@@ -253,7 +253,6 @@ export default function PartsCatalog({ serial }: Props) {
               const partCatalogId = part.catalogId || catalog?.id
               const documentName = part.documentName || catalog?.documentName
               const documentPages = part.documentPages || catalog?.documentPages
-              const pdfAvailable = part.pdfAvailable ?? catalog?.pdfAvailable
               return (
               <tr key={`${partCatalogId}-${part.code}-${part.item}-${part.page}`}>
                 <td data-label="Codice">
@@ -279,24 +278,11 @@ export default function PartsCatalog({ serial }: Props) {
                         : 'Generico'}
                   </span>
                 </td>
-                <td data-label="Riferimento PDF">
-                  {pdfAvailable && partCatalogId ? (
-                    <a
-                      className="pdf-reference"
-                      href={`/api/pdf?catalogId=${encodeURIComponent(partCatalogId)}&page=${part.page}`}
-                      target="_blank"
-                      rel="noreferrer"
-                      title={`Apri ${documentName}`}
-                    >
-                      <FileText size={15} />
-                      Apri pagina {part.page}
-                    </a>
-                  ) : (
-                    <span className="pdf-reference" title={documentName}>
-                      <FileText size={15} />
-                      Pagina {part.page} / {documentPages}
-                    </span>
-                  )}
+                <td data-label="Tavola">
+                  <span className="pdf-reference" title={documentName}>
+                    <FileText size={15} />
+                    Pagina {part.page} / {documentPages}
+                  </span>
                 </td>
               </tr>
               )

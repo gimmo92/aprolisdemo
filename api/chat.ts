@@ -3,6 +3,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { z } from 'zod'
 import { findCatalog, searchParts } from './lib/retrieval.js'
 import {
+  findExplodedViewIds,
   findSupabaseCatalog,
   searchSupabaseParts,
 } from './lib/supabase-retrieval.js'
@@ -69,7 +70,7 @@ function textFromResponse(message: Anthropic.Messages.Message) {
     .trim()
 }
 
-function publicPart(part: IndexedPart) {
+function publicPart(part: IndexedPart, catalogId?: string, viewId?: string) {
   return {
     code: part.code,
     description: part.description,
@@ -79,6 +80,8 @@ function publicPart(part: IndexedPart) {
     page: part.page,
     category: part.category,
     keywords: [],
+    ...(catalogId ? { catalogId } : {}),
+    ...(viewId ? { viewId } : {}),
   }
 }
 
@@ -254,7 +257,7 @@ export default async function handler(
                 serial,
                 document: catalog.documentName,
               },
-              parts: parts.map(publicPart),
+              parts: parts.map((part) => publicPart(part)),
             }),
           }
           }),
@@ -272,7 +275,26 @@ export default async function handler(
     }
 
     const verifiedParts = [...retrieved.values()].slice(0, 6)
-    const parts = verifiedParts.map(publicPart)
+    let viewIds = new Map<string, string>()
+    if (remoteCatalog) {
+      try {
+        viewIds = await findExplodedViewIds(
+          remoteCatalog.catalog.id,
+          verifiedParts.flatMap((part) =>
+            part.assemblyCode ? [part.assemblyCode] : [],
+          ),
+        )
+      } catch (error) {
+        console.error('Exploded deep-link lookup failed', error)
+      }
+    }
+    const parts = verifiedParts.map((part) =>
+      publicPart(
+        part,
+        catalog.id,
+        part.assemblyCode ? viewIds.get(part.assemblyCode) : undefined,
+      ),
+    )
     const generatedAnswer =
       textFromResponse(aiMessage) ||
       (parts.length
