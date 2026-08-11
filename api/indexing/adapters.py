@@ -556,14 +556,110 @@ class HangchaAdapter(BaseAdapter):
 
 
 class MovexxAdapter(BaseAdapter):
+    """Movexx option/spare price lists: card layout with CODE + 'Item no.' + description."""
+
     name = "movexx"
     header_aliases = {
         **BaseAdapter.header_aliases,
-        "item": ("position", "pos", "item"),
+        "item": ("position", "pos", "item", "item no"),
         "code": ("part nr", "part no", "article nr", "artikelnummer", "code"),
         "description": ("description", "omschrijving", "bezeichnung"),
         "quantity": ("qty", "quantity", "aantal", "anzahl"),
     }
+
+    _CODE_RE = re.compile(r"^(?=.{3,40}$)[A-Z0-9][A-Z0-9._/+()\-]*$", re.I)
+    _ITEM_LABEL_RE = re.compile(r"^item\s*no\.?$", re.I)
+
+    @classmethod
+    def _valid_movexx_code(cls, value: str) -> bool:
+        value = clean_text(value).replace(" ", "")
+        return (
+            cls._CODE_RE.fullmatch(value) is not None
+            and any(char.isdigit() for char in value)
+        )
+
+    def _parse_item_cards(
+        self, page: fitz.Page, page_number: int
+    ) -> list[ExtractedPart]:
+        parts: list[ExtractedPart] = []
+        for block in page.get_text("dict").get("blocks", []):
+            if block.get("type") != 0:
+                continue
+            lines = [
+                clean_text(
+                    "".join(span.get("text", "") for span in line.get("spans", []))
+                )
+                for line in block.get("lines", [])
+            ]
+            lines = [line for line in lines if line]
+            if len(lines) < 3:
+                continue
+            label_index = next(
+                (
+                    index
+                    for index, line in enumerate(lines)
+                    if self._ITEM_LABEL_RE.fullmatch(line)
+                ),
+                None,
+            )
+            if label_index is None or label_index < 1:
+                continue
+            code = clean_text(lines[label_index - 1]).replace(" ", "")
+            if not self._valid_movexx_code(code):
+                continue
+            description = clean_text(" ".join(lines[label_index + 1 :]))
+            if not description or is_noise(description):
+                continue
+            if "movexx international" in description.casefold():
+                continue
+            bbox = (
+                float(block.get("bbox", [0, 0, 0, 0])[0]),
+                float(block.get("bbox", [0, 0, 0, 0])[1]),
+                float(block.get("bbox", [0, 0, 0, 0])[2]),
+                float(block.get("bbox", [0, 0, 0, 0])[3]),
+            )
+            parts.append(
+                ExtractedPart(
+                    code=code,
+                    description=description,
+                    original_description=description,
+                    quantity=1,
+                    item="",
+                    page=page_number,
+                    category="Ricambi / opzioni",
+                    source_type="mechanical",
+                    confidence=0.92,
+                    bbox=bbox,
+                    metadata={"layout": "movexx_item_card"},
+                )
+            )
+        return parts
+
+    def extract_page(self, page: fitz.Page, page_number: int) -> PageExtraction:
+        lines = page_lines(page)
+        text_chars = sum(len(line.text) for line in lines)
+        parts = self._parse_item_cards(page, page_number)
+        if not parts:
+            parts.extend(self.parse_coordinate_tables(lines, page_number))
+            parts.extend(self.parse_line_patterns(lines, page_number))
+        parts = _deduplicate(parts)
+        confidence = (
+            sum(part.confidence for part in parts) / len(parts) if parts else 0.0
+        )
+        reasons: list[str] = []
+        if text_chars < 40:
+            reasons.append("insufficient_text")
+        if not parts and text_chars >= 40:
+            reasons.append("no_rows")
+            if any(
+                self._ITEM_LABEL_RE.fullmatch(line.text) for line in lines
+            ) or looks_like_parts_page(lines):
+                reasons.append("unparsed_table")
+        if len(parts) == 1:
+            reasons.append("sparse_table")
+        if parts and confidence < 0.68:
+            reasons.append("low_confidence")
+        return PageExtraction(parts, confidence, text_chars, self.name, reasons)
 
 
 class FiorentiniAdapter(BaseAdapter):
