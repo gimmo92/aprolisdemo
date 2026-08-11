@@ -447,20 +447,6 @@ export function AdminCatalogs() {
             : ['ready', 'needs_review', 'failed'].includes(catalog.status)
               ? catalog.status
               : job?.status || catalog.status
-          const explodedRates =
-            catalog.exploded_views?.map((view) => view.trace_rate) || []
-          const persistedExplodedViews =
-            catalog.exploded_views?.length ||
-            job?.report?.persistedExplodedViews ||
-            0
-          const traceRate = persistedExplodedViews
-            ? (
-            explodedRates.length
-              ? explodedRates.reduce((total, rate) => total + rate, 0) /
-                explodedRates.length
-              : job?.report?.explodedTraceRate
-              )
-            : undefined
           const retryableReview =
             !bundled &&
             state === 'needs_review' &&
@@ -493,20 +479,6 @@ export function AdminCatalogs() {
                   {bundled ? '' : job?.progress ? `${job.progress}%` : ''}
                 </span>
                 <span>{catalog.part_count || 0} ricambi</span>
-                {!bundled && traceRate !== undefined && (
-                  <span
-                    className={`exploded-quality ${traceRate >= 0.8 ? 'good' : 'review'}`}
-                  >
-                    Esplosi {Math.round(traceRate * 100)}%
-                  </span>
-                )}
-                {!bundled &&
-                  traceRate === undefined &&
-                  job?.report?.explodedViews !== undefined && (
-                    <span className="exploded-quality review">
-                      Esplosi non salvati
-                    </span>
-                  )}
                 <div className="admin-row-actions">
                   {!bundled &&
                     (state === 'ready' ||
