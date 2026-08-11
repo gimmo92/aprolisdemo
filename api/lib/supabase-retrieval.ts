@@ -253,3 +253,21 @@ export async function findExplodedViewIds(
   return new Map((data || []).map((view) => [view.figure_code, view.id]))
 }
 
+export async function createSignedPdfUrl(catalogId: string, expiresIn = 300) {
+  if (!isSupabaseConfigured()) return undefined
+  const supabase = getSupabaseAdmin()
+  const { data: catalog, error } = await supabase
+    .from('catalogs')
+    .select('storage_path')
+    .eq('id', catalogId)
+    .eq('status', 'ready')
+    .single()
+
+  if (error || !catalog?.storage_path) return undefined
+  const { data, error: signError } = await supabase.storage
+    .from('catalogs')
+    .createSignedUrl(catalog.storage_path, expiresIn)
+  if (signError) throw signError
+  return data.signedUrl
+}
+

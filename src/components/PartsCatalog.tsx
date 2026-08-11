@@ -279,10 +279,23 @@ export default function PartsCatalog({ serial }: Props) {
                   </span>
                 </td>
                 <td data-label="Tavola">
-                  <span className="pdf-reference" title={documentName}>
-                    <FileText size={15} />
-                    Pagina {part.page} / {documentPages}
-                  </span>
+                  {part.pdfAvailable && partCatalogId && partCatalogId !== 'all-ready' ? (
+                    <a
+                      className="pdf-reference"
+                      href={`/api/pdf?catalogId=${encodeURIComponent(partCatalogId)}&page=${part.page}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      title={`Apri ${documentName || 'PDF'} a pagina ${part.page}`}
+                    >
+                      <FileText size={15} />
+                      Pagina {part.page} / {documentPages}
+                    </a>
+                  ) : (
+                    <span className="pdf-reference is-static" title={documentName}>
+                      <FileText size={15} />
+                      Pagina {part.page} / {documentPages}
+                    </span>
+                  )}
                 </td>
               </tr>
               )

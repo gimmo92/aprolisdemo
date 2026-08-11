@@ -594,6 +594,16 @@ button {
   color: var(--blue-800);
   font-size: 9px;
   font-weight: 700;
+  text-decoration: none;
+}
+
+a.pdf-reference:hover {
+  color: var(--blue-600);
+  text-decoration: underline;
+}
+
+.pdf-reference.is-static {
+  color: #6b8095;
 }
 
 .pdf-reference svg {
