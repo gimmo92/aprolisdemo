@@ -41,12 +41,25 @@ export default async function handler(
   const supabase = getSupabaseAdmin()
 
   if (request.method === 'GET') {
-    const { data, error } = await supabase
+    const baseSelection =
+      'id, brand, model, version, original_filename, storage_path, status, page_count, part_count, revision, created_at, updated_at, ingestion_jobs(id, status, progress, error_message, report, created_at, updated_at)'
+    let { data, error } = await supabase
       .from('catalogs')
       .select(
-        'id, brand, model, version, original_filename, storage_path, status, page_count, part_count, revision, created_at, updated_at, ingestion_jobs(id, status, progress, error_message, report, created_at, updated_at)',
+        `${baseSelection}, exploded_views(id, trace_rate, asset_type)`,
       )
       .order('created_at', { ascending: false })
+    if (error?.code === 'PGRST200' || error?.code === 'PGRST205') {
+      const fallback = await supabase
+        .from('catalogs')
+        .select(baseSelection)
+        .order('created_at', { ascending: false })
+      data = (fallback.data || []).map((catalog) => ({
+        ...catalog,
+        exploded_views: [],
+      }))
+      error = fallback.error
+    }
     if (error) return response.status(500).json({ error: error.message })
     const supabaseCatalogs = (data || []).map((catalog) => ({
       ...catalog,
@@ -169,9 +182,17 @@ export default async function handler(
       .single()
     if (!catalog) return response.status(404).json({ error: 'Catalogo non trovato.' })
 
+    const { data: explodedAssets } = await supabase
+      .from('exploded_views')
+      .select('svg_path')
+      .eq('catalog_id', catalogId)
     const { error } = await supabase.from('catalogs').delete().eq('id', catalogId)
     if (error) return response.status(500).json({ error: error.message })
     await supabase.storage.from('catalogs').remove([catalog.storage_path])
+    const assetPaths = (explodedAssets || []).map((asset) => asset.svg_path)
+    if (assetPaths.length) {
+      await supabase.storage.from('exploded-views').remove(assetPaths)
+    }
     return response.status(200).json({ deleted: true })
   }
 

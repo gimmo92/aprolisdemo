@@ -48,10 +48,37 @@ export type PartsIndexResponse = {
   }
 }
 
-export type ExplodedPdfResponse = {
+export type ExplodedCallout = {
+  id: string
+  label: string
+  items: string[]
+  x: number
+  y: number
+  tipX: number
+  tipY: number
+  traced: boolean
+}
+
+export type ExplodedViewSummary = {
+  id: string
   catalogId: string
-  page: number
-  pdfUrl: string
+  machine: string
+  figureCode: string
+  title: string
+  pageIndex: number
+  partsPages: number[]
+  assetType: 'svg' | 'png'
+  viewW: number
+  viewH: number
+  traceRate: number
+}
+
+export type ExplodedViewResponse = {
+  view: ExplodedViewSummary
+  svg?: string
+  imageUrl?: string
+  callouts: ExplodedCallout[]
+  parts: CatalogPart[]
 }
 
 type ChatResponse = {
@@ -123,9 +150,13 @@ export function getIndexedParts(serial?: string) {
   )
 }
 
-export function getExplodedPdfUrl(catalogId: string, page: number) {
-  return apiFetch<ExplodedPdfResponse>(
-    `/api/pdf?catalogId=${encodeURIComponent(catalogId)}&page=${page}&format=json`,
+export function getExplodedViews() {
+  return apiFetch<{ views: ExplodedViewSummary[] }>('/api/exploded')
+}
+
+export function getExplodedView(viewId: string) {
+  return apiFetch<ExplodedViewResponse>(
+    `/api/exploded?viewId=${encodeURIComponent(viewId)}`,
   )
 }
 

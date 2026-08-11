@@ -11,6 +11,7 @@ from .adapters import (
     PageExtraction,
     select_adapter,
 )
+from .exploded import asset_rows, extract_exploded_assets
 
 __all__ = [
     "BaseAdapter",
@@ -22,4 +23,6 @@ __all__ = [
     "MovexxAdapter",
     "PageExtraction",
     "select_adapter",
+    "asset_rows",
+    "extract_exploded_assets",
 ]

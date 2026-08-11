@@ -1,0 +1,186 @@
+import { gunzipSync } from 'node:zlib'
+import type { VercelRequest, VercelResponse } from '@vercel/node'
+import { z } from 'zod'
+import { getSupabaseAdmin, isSupabaseConfigured } from './lib/supabase.js'
+
+const viewIdSchema = z.string().uuid()
+
+type ExplodedRow = {
+  id: string
+  catalog_id: string
+  machine: string
+  figure_code: string
+  title: string
+  page_index: number
+  parts_pages: number[]
+  svg_path: string
+  asset_type: 'svg' | 'png'
+  view_w: number
+  view_h: number
+  trace_rate: number
+  catalogs?: { status?: string } | Array<{ status?: string }>
+}
+
+function stripUnsafeSvg(markup: string) {
+  return markup
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '')
+    .replace(/<foreignObject\b[^>]*>[\s\S]*?<\/foreignObject>/gi, '')
+    .replace(/\s+on[a-z]+\s*=\s*(?:"[^"]*"|'[^']*')/gi, '')
+    .replace(
+      /\s+(?:xlink:href|href)\s*=\s*(?:"(?:https?:)?\/\/[^"]*"|'(?:https?:)?\/\/[^']*')/gi,
+      '',
+    )
+}
+
+function publicView(row: ExplodedRow) {
+  return {
+    id: row.id,
+    catalogId: row.catalog_id,
+    machine: row.machine,
+    figureCode: row.figure_code,
+    title: row.title,
+    pageIndex: row.page_index,
+    partsPages: row.parts_pages,
+    assetType: row.asset_type,
+    viewW: row.view_w,
+    viewH: row.view_h,
+    traceRate: row.trace_rate,
+  }
+}
+
+export default async function handler(
+  request: VercelRequest,
+  response: VercelResponse,
+) {
+  if (request.method !== 'GET') {
+    response.setHeader('Allow', 'GET')
+    return response.status(405).json({ error: 'Metodo non consentito.' })
+  }
+  if (!isSupabaseConfigured()) {
+    return response.status(503).json({ error: 'Supabase non configurato.' })
+  }
+
+  const supabase = getSupabaseAdmin()
+  const rawViewId =
+    typeof request.query.viewId === 'string' ? request.query.viewId : ''
+
+  try {
+    if (!rawViewId) {
+      const { data, error } = await supabase
+        .from('exploded_views')
+        .select(
+          'id, catalog_id, machine, figure_code, title, page_index, parts_pages, svg_path, asset_type, view_w, view_h, trace_rate, catalogs!inner(status)',
+        )
+        .eq('catalogs.status', 'ready')
+        .order('machine')
+        .order('title')
+      if (error) {
+        if (error.code === '42P01' || error.code === 'PGRST205') {
+          return response.status(200).json({ views: [] })
+        }
+        throw error
+      }
+      response.setHeader('Cache-Control', 'public, max-age=60, s-maxage=300')
+      return response
+        .status(200)
+        .json({ views: ((data || []) as ExplodedRow[]).map(publicView) })
+    }
+
+    const parsed = viewIdSchema.safeParse(rawViewId)
+    if (!parsed.success) {
+      return response.status(400).json({ error: 'Tavola non valida.' })
+    }
+    const { data, error } = await supabase
+      .from('exploded_views')
+      .select(
+        'id, catalog_id, machine, figure_code, title, page_index, parts_pages, svg_path, asset_type, view_w, view_h, trace_rate, catalogs!inner(status)',
+      )
+      .eq('id', parsed.data)
+      .eq('catalogs.status', 'ready')
+      .maybeSingle()
+    if (error || !data) {
+      return response.status(404).json({ error: 'Tavola non disponibile.' })
+    }
+    const view = data as ExplodedRow
+
+    const [{ data: callouts, error: calloutError }, { data: parts, error: partsError }] =
+      await Promise.all([
+        supabase
+          .from('exploded_callouts')
+          .select('id, label, items, x, y, tip_x, tip_y, traced')
+          .eq('view_id', view.id)
+          .order('label'),
+        supabase
+          .from('parts')
+          .select(
+            'code, description, original_description, quantity, item, page_number, category, assembly_code, assembly_title, source_type',
+          )
+          .eq('catalog_id', view.catalog_id)
+          .in('page_number', view.parts_pages)
+          .order('page_number')
+          .order('item'),
+      ])
+    if (calloutError || partsError) throw calloutError || partsError
+
+    let svg: string | undefined
+    let imageUrl: string | undefined
+    if (view.asset_type === 'svg') {
+      const { data: asset, error: assetError } = await supabase.storage
+        .from('exploded-views')
+        .download(view.svg_path)
+      if (assetError || !asset) throw assetError || new Error('SVG non disponibile')
+      let bytes = Buffer.from(await asset.arrayBuffer())
+      if (bytes[0] === 0x1f && bytes[1] === 0x8b) bytes = gunzipSync(bytes)
+      svg = stripUnsafeSvg(bytes.toString('utf8'))
+    } else {
+      const { data: signed, error: signError } = await supabase.storage
+        .from('exploded-views')
+        .createSignedUrl(view.svg_path, 3600)
+      if (signError || !signed) throw signError || new Error('Immagine non disponibile')
+      imageUrl = signed.signedUrl
+    }
+
+    response.setHeader('Cache-Control', 'public, max-age=300, s-maxage=3600')
+    return response.status(200).json({
+      view: publicView(view),
+      svg,
+      imageUrl,
+      callouts: (callouts || []).map((callout) => ({
+        id: callout.id,
+        label: callout.label,
+        items: (callout.items || []).map(String),
+        x: callout.x,
+        y: callout.y,
+        tipX: callout.tip_x,
+        tipY: callout.tip_y,
+        traced: callout.traced,
+      })),
+      parts: (parts || [])
+        .filter(
+          (part) =>
+            part.assembly_code === view.figure_code ||
+            part.assembly_title === view.title,
+        )
+        .map((part) => ({
+        code: part.code,
+        description: part.description || part.original_description || 'Ricambio',
+        originalDescription:
+          part.original_description || part.description || 'Ricambio',
+        quantity: part.quantity ?? 0,
+        item: part.item || '',
+        page: part.page_number,
+        category: part.category || 'Ricambi',
+        assemblyCode: part.assembly_code || undefined,
+        assemblyTitle: part.assembly_title || undefined,
+        sourceType: ['mechanical', 'electrical'].includes(part.source_type)
+          ? part.source_type
+          : 'generic',
+        catalogId: view.catalog_id,
+          catalogName: view.machine,
+        })),
+    })
+  } catch (error) {
+    console.error('Exploded view API failed', error)
+    return response.status(500).json({ error: 'Impossibile caricare la tavola.' })
+  }
+}

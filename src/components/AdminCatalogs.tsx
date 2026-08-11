@@ -5,7 +5,6 @@ import {
   AlertCircle,
   BadgeCheck,
   CheckCircle2,
-  FileSearch,
   FileUp,
   LoaderCircle,
   LogIn,
@@ -30,6 +29,11 @@ type AdminCatalog = {
   created_at: string
   source?: 'supabase' | 'bundled'
   serial_numbers?: string[]
+  exploded_views?: Array<{
+    id: string
+    trace_rate: number
+    asset_type: 'svg' | 'png'
+  }>
   ingestion_jobs?: Array<{
     id: string
     status: string
@@ -41,6 +45,13 @@ type AdminCatalog = {
       aiParts?: number
       unresolvedPages?: number[]
       remainingAiPages?: number[]
+      explodedViews?: number
+      interactiveExplodedViews?: number
+      explodedTraceRate?: number
+      explodedError?: {
+        code?: string
+        message?: string
+      }
       aiErrors?: Array<{
         page?: number
         code?: string
@@ -88,6 +99,9 @@ function reportSummary(
   job: NonNullable<AdminCatalog['ingestion_jobs']>[number] | undefined,
 ) {
   const report = job?.report
+  if (report?.explodedError) {
+    return `Esplosi [${report.explodedError.code || 'errore'}]: ${report.explodedError.message || 'persistenza non disponibile'}`
+  }
   const aiError = report?.aiErrors?.[0]
   if (aiError) {
     const upstream =
@@ -357,22 +371,6 @@ export function AdminCatalogs() {
     }
   }
 
-  async function openReviewPage(catalog: AdminCatalog, page: number) {
-    if (!supabase) return
-    const preview = window.open('about:blank', '_blank')
-    const { data, error } = await supabase.storage
-      .from('catalogs')
-      .createSignedUrl(catalog.storage_path, 300)
-    if (error || !data?.signedUrl) {
-      preview?.close()
-      setMessage(error?.message || 'Impossibile aprire il PDF.')
-      return
-    }
-    const url = `${data.signedUrl}#page=${page}`
-    if (preview) preview.location.href = url
-    else window.open(url, '_blank', 'noopener,noreferrer')
-  }
-
   async function approveCatalog(catalog: AdminCatalog) {
     if (
       !authHeaders ||
@@ -491,7 +489,13 @@ export function AdminCatalogs() {
             : ['ready', 'needs_review', 'failed'].includes(catalog.status)
               ? catalog.status
               : job?.status || catalog.status
-          const reviewPage = job?.report?.unresolvedPages?.[0]
+          const explodedRates =
+            catalog.exploded_views?.map((view) => view.trace_rate) || []
+          const traceRate =
+            explodedRates.length
+              ? explodedRates.reduce((total, rate) => total + rate, 0) /
+                explodedRates.length
+              : job?.report?.explodedTraceRate
           const retryableReview =
             !bundled &&
             state === 'needs_review' &&
@@ -513,12 +517,14 @@ export function AdminCatalogs() {
               </div>
               <span className="status-badge">{state === 'ready' && <CheckCircle2 size={14} />}{statusLabel(state)} {bundled ? '' : job?.progress ? `${job.progress}%` : ''}</span>
               <span>{catalog.part_count || 0} ricambi</span>
+              {!bundled && traceRate !== undefined && (
+                <span className={`exploded-quality ${traceRate >= 0.8 ? 'good' : 'review'}`}>
+                  Esplosi {Math.round(traceRate * 100)}%
+                </span>
+              )}
               <div className="admin-row-actions">
                 {!bundled && (state === 'failed' || retryableReview || stale) && (
                   <button className="icon-retry" onClick={() => void retryCatalog(catalog)} disabled={busy} aria-label="Riprova indicizzazione"><RefreshCw size={17} /></button>
-                )}
-                {!bundled && state === 'needs_review' && reviewPage && (
-                  <button className="icon-review" onClick={() => void openReviewPage(catalog, reviewPage)} disabled={busy} aria-label={`Apri pagina ${reviewPage}`} title={`Apri pagina ${reviewPage}`}><FileSearch size={17} /></button>
                 )}
                 {!bundled && state === 'needs_review' && (
                   <button className="icon-approve" onClick={() => void approveCatalog(catalog)} disabled={busy} aria-label="Approva catalogo" title="Approva catalogo"><BadgeCheck size={17} /></button>

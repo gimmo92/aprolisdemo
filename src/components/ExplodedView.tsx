@@ -4,50 +4,54 @@ import {
   Layers,
   LoaderCircle,
   PackageOpen,
+  Search,
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   ApiError,
-  getExplodedPdfUrl,
-  getIndexedParts,
+  getExplodedView,
+  getExplodedViews,
   type CatalogPart,
+  type ExplodedViewResponse,
+  type ExplodedViewSummary,
 } from '../lib/api'
-import {
-  renderExplodedPage,
-  type Hotspot,
-} from '../lib/pdfHotspots'
-import { fallbackHotspots } from '../lib/hotspotLayout'
 
-type AssemblyGroup = {
-  key: string
-  catalogId: string
-  catalogName: string
-  page: number
-  title: string
-  code: string
-  parts: CatalogPart[]
-  pdfAvailable: boolean
+export type ExplodedSelection = {
+  viewId: string
+  item: string
 }
 
-export default function ExplodedView() {
-  const canvasRef = useRef<HTMLCanvasElement>(null)
-  const [parts, setParts] = useState<CatalogPart[]>([])
+type Props = {
+  selection?: ExplodedSelection
+  onSelectionChange?: (selection: ExplodedSelection) => void
+}
+
+function normalize(value: string) {
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLocaleLowerCase('it')
+    .trim()
+}
+
+export default function ExplodedView({ selection, onSelectionChange }: Props) {
+  const [views, setViews] = useState<ExplodedViewSummary[]>([])
+  const [detail, setDetail] = useState<ExplodedViewResponse>()
   const [catalogFilter, setCatalogFilter] = useState('')
   const [selectedKey, setSelectedKey] = useState('')
   const [selectedItem, setSelectedItem] = useState('')
-  const [hotspots, setHotspots] = useState<Hotspot[]>([])
-  const [drawingPage, setDrawingPage] = useState<number>()
+  const [hoveredItem, setHoveredItem] = useState('')
+  const [query, setQuery] = useState('')
   const [isLoading, setIsLoading] = useState(true)
   const [isPageLoading, setIsPageLoading] = useState(false)
   const [error, setError] = useState('')
+  const rowRefs = useRef<Record<string, HTMLButtonElement | null>>({})
 
   useEffect(() => {
     let active = true
-    setIsLoading(true)
-    getIndexedParts()
-      .then((result) => {
-        if (!active) return
-        setParts(result.parts)
+    getExplodedViews()
+      .then(({ views: nextViews }) => {
+        if (active) setViews(nextViews)
       })
       .catch((requestError: unknown) => {
         if (!active) return
@@ -65,147 +69,110 @@ export default function ExplodedView() {
     }
   }, [])
 
-  const assemblies = useMemo(() => {
-    const groups = new Map<string, AssemblyGroup>()
-    for (const part of parts) {
-      if (!part.catalogId || !part.page) continue
-      const key = `${part.catalogId}:${part.page}`
-      const existing = groups.get(key)
-      if (existing) {
-        existing.parts.push(part)
-        continue
-      }
-      groups.set(key, {
-        key,
-        catalogId: part.catalogId,
-        catalogName: part.catalogName || 'Catalogo',
-        page: part.page,
-        title: part.assemblyTitle || part.category || `Pagina ${part.page}`,
-        code: part.assemblyCode || '',
-        parts: [part],
-        pdfAvailable: Boolean(part.pdfAvailable),
-      })
-    }
-    return [...groups.values()].sort(
-      (left, right) =>
-        left.catalogName.localeCompare(right.catalogName, 'it') ||
-        left.page - right.page,
-    )
-  }, [parts])
-
   const catalogs = useMemo(
     () =>
-      [...new Set(assemblies.map((assembly) => assembly.catalogName))].sort((a, b) =>
+      [...new Set(views.map((view) => view.machine))].sort((a, b) =>
         a.localeCompare(b, 'it'),
       ),
-    [assemblies],
+    [views],
   )
-
-  const visibleAssemblies = useMemo(
+  const visibleViews = useMemo(
     () =>
-      assemblies.filter(
-        (assembly) => !catalogFilter || assembly.catalogName === catalogFilter,
-      ),
-    [assemblies, catalogFilter],
+      views.filter((view) => !catalogFilter || view.machine === catalogFilter),
+    [catalogFilter, views],
   )
 
   useEffect(() => {
-    if (!visibleAssemblies.length) {
-      setSelectedKey('')
+    if (selection?.viewId && views.some((view) => view.id === selection.viewId)) {
+      setSelectedKey(selection.viewId)
       return
     }
-    if (!visibleAssemblies.some((assembly) => assembly.key === selectedKey)) {
-      setSelectedKey(visibleAssemblies[0].key)
+    if (!visibleViews.some((view) => view.id === selectedKey)) {
+      setSelectedKey(visibleViews[0]?.id || '')
     }
-  }, [selectedKey, visibleAssemblies])
-
-  const selectedAssembly = visibleAssemblies.find(
-    (assembly) => assembly.key === selectedKey,
-  )
+  }, [selectedKey, selection?.viewId, views, visibleViews])
 
   useEffect(() => {
-    if (!selectedAssembly) {
-      setHotspots([])
-      setDrawingPage(undefined)
-      setSelectedItem('')
+    if (!selectedKey) {
+      setDetail(undefined)
       return
     }
-
     let active = true
     setIsPageLoading(true)
     setError('')
-    setHotspots([])
-    setDrawingPage(undefined)
-    setSelectedItem(selectedAssembly.parts[0]?.item || '')
-
-    const load = async () => {
-      if (!selectedAssembly.pdfAvailable) {
+    getExplodedView(selectedKey)
+      .then((nextDetail) => {
         if (!active) return
-        setHotspots(
-          fallbackHotspots(selectedAssembly.parts.map((part) => part.item)),
-        )
-        return
-      }
-
-      const meta = await getExplodedPdfUrl(
-        selectedAssembly.catalogId,
-        selectedAssembly.page,
-      )
-      if (!active) return
-
-      let canvas = canvasRef.current
-      for (let attempt = 0; !canvas && attempt < 20; attempt += 1) {
-        await new Promise<void>((resolve) => {
-          requestAnimationFrame(() => resolve())
-        })
-        canvas = canvasRef.current
-      }
-      if (!canvas) {
-        throw new Error('Canvas disegno non disponibile.')
-      }
-      const rendered = await renderExplodedPage(
-        meta.pdfUrl,
-        selectedAssembly.page,
-        selectedAssembly.parts.map((part) => part.item),
-        canvas,
-      )
-      if (!active) return
-      setHotspots(rendered.hotspots)
-      setDrawingPage(rendered.drawingPage)
-    }
-
-    void load()
+        setDetail(nextDetail)
+        setSelectedItem(nextDetail.parts[0]?.item || '')
+      })
       .catch((requestError: unknown) => {
         if (!active) return
-        setHotspots(
-          fallbackHotspots(selectedAssembly.parts.map((part) => part.item)),
-        )
-        setSelectedItem(selectedAssembly.parts[0]?.item || '')
+        setDetail(undefined)
         setError(
           requestError instanceof ApiError
             ? requestError.message
-            : requestError instanceof Error
-              ? requestError.message
-              : 'Esploso non disponibile per questa pagina.',
+            : 'Tavola non disponibile.',
         )
       })
       .finally(() => {
         if (active) setIsPageLoading(false)
       })
-
     return () => {
       active = false
     }
-  }, [selectedAssembly])
+  }, [selectedKey])
 
-  const activeParts = selectedAssembly?.parts || []
-  const selectedPart =
-    activeParts.find((part) => part.item === selectedItem) || activeParts[0]
+  useEffect(() => {
+    if (
+      selection?.viewId === selectedKey &&
+      detail?.parts.some((part) => part.item === selection.item)
+    ) {
+      setSelectedItem(selection.item)
+    }
+  }, [detail?.parts, selectedKey, selection])
+
+  const selectItem = (item: string) => {
+    setSelectedItem(item)
+    onSelectionChange?.({ viewId: selectedKey, item })
+  }
+
+  useEffect(() => {
+    rowRefs.current[selectedItem]?.scrollIntoView({
+      block: 'nearest',
+      behavior: 'smooth',
+    })
+  }, [selectedItem])
+
+  const normalizedQuery = normalize(query)
+  const matchingItems = useMemo(
+    () =>
+      new Set(
+        (detail?.parts || [])
+          .filter((part) =>
+            normalize(
+              `${part.item} ${part.code} ${part.description} ${part.originalDescription}`,
+            ).includes(normalizedQuery),
+          )
+          .map((part) => part.item),
+      ),
+    [detail?.parts, normalizedQuery],
+  )
+  const visibleParts = (detail?.parts || []).filter(
+    (part) => !normalizedQuery || matchingItems.has(part.item),
+  )
+  const selectedCallout = detail?.callouts.find((callout) =>
+    callout.items.includes(selectedItem),
+  )
+  const selectedItems = selectedCallout?.items || [selectedItem]
+  const selectedParts =
+    detail?.parts.filter((part) => selectedItems.includes(part.item)) || []
+  const selectedPart = selectedParts[0] || detail?.parts[0]
   const selectedIndex = Math.max(
     0,
-    visibleAssemblies.findIndex((assembly) => assembly.key === selectedKey),
+    visibleViews.findIndex((view) => view.id === selectedKey),
   )
-  const showDrawing = Boolean(selectedAssembly?.pdfAvailable && !error)
+  const activePulseItem = hoveredItem || selectedItem
 
   if (isLoading) {
     return (
@@ -217,14 +184,14 @@ export default function ExplodedView() {
     )
   }
 
-  if (!assemblies.length) {
+  if (!views.length) {
     return (
       <div className="catalog-state error">
         <PackageOpen size={27} />
         <strong>Nessun esploso disponibile</strong>
         <span>
           {error ||
-            'Indicizza un catalogo con ricambi per pagina per navigare le tavole.'}
+            'Indicizza nuovamente un catalogo per generare SVG e callout lato server.'}
         </span>
       </div>
     )
@@ -256,19 +223,21 @@ export default function ExplodedView() {
 
       <div className="exploded-layout">
         <aside className="exploded-assembly-list" aria-label="Tavole esploso">
-          {visibleAssemblies.map((assembly) => (
+          {visibleViews.map((view) => (
             <button
-              key={assembly.key}
+              key={view.id}
               type="button"
-              className={assembly.key === selectedKey ? 'active' : ''}
-              onClick={() => setSelectedKey(assembly.key)}
+              className={view.id === selectedKey ? 'active' : ''}
+              onClick={() => setSelectedKey(view.id)}
             >
-              <strong>{assembly.title}</strong>
+              <strong>{view.title}</strong>
               <span>
-                {assembly.catalogName} · pag. {assembly.page}
-                {assembly.code ? ` · ${assembly.code}` : ''}
+                {view.machine} · {view.figureCode}
               </span>
-              <small>{assembly.parts.length} ricambi</small>
+              <small>
+                Tracciamento {Math.round(view.traceRate * 100)}% ·{' '}
+                {view.assetType === 'svg' ? 'interattivo' : 'fallback'}
+              </small>
             </button>
           ))}
         </aside>
@@ -279,26 +248,24 @@ export default function ExplodedView() {
               type="button"
               disabled={selectedIndex <= 0}
               onClick={() =>
-                setSelectedKey(visibleAssemblies[selectedIndex - 1]?.key || '')
+                setSelectedKey(visibleViews[selectedIndex - 1]?.id || '')
               }
               aria-label="Tavola precedente"
             >
               <ChevronLeft size={18} />
             </button>
             <div>
-              <strong>{selectedAssembly?.title}</strong>
+              <strong>{detail?.view.title}</strong>
               <span>
-                {selectedAssembly?.catalogName}
-                {drawingPage && drawingPage !== selectedAssembly?.page
-                  ? ` · disegno pag. ${drawingPage} · distinta pag. ${selectedAssembly?.page}`
-                  : ` · pagina ${selectedAssembly?.page}`}
+                {detail?.view.machine} · {detail?.view.figureCode} · tavola{' '}
+                {detail?.view.pageIndex}
               </span>
             </div>
             <button
               type="button"
-              disabled={selectedIndex >= visibleAssemblies.length - 1}
+              disabled={selectedIndex >= visibleViews.length - 1}
               onClick={() =>
-                setSelectedKey(visibleAssemblies[selectedIndex + 1]?.key || '')
+                setSelectedKey(visibleViews[selectedIndex + 1]?.id || '')
               }
               aria-label="Tavola successiva"
             >
@@ -310,109 +277,101 @@ export default function ExplodedView() {
             {isPageLoading && (
               <div className="exploded-canvas-state">
                 <LoaderCircle className="spin" size={24} />
-                <span>Rendering disegno interattivo…</span>
+                <span>Caricamento tavola interattiva…</span>
               </div>
             )}
-
-            <div
-              className="exploded-canvas"
-              hidden={isPageLoading || !showDrawing}
-            >
-              <div className="exploded-drawing">
-                <canvas ref={canvasRef} />
+            {!isPageLoading && detail?.view.assetType === 'svg' && detail.svg && (
+              <div className="exploded-vector-stack">
+                <div
+                  className="exploded-svg-art"
+                  aria-hidden="true"
+                  dangerouslySetInnerHTML={{ __html: detail.svg }}
+                />
                 <svg
                   className="exploded-hotspot-layer"
-                  viewBox="0 0 1000 1000"
-                  preserveAspectRatio="none"
+                  viewBox={`0 0 ${detail.view.viewW} ${detail.view.viewH}`}
                   role="img"
                   aria-label="Posizioni cliccabili sull’esploso"
                 >
-                  {hotspots.map((hotspot, index) => {
-                    const cx = hotspot.x * 1000
-                    const cy = hotspot.y * 1000
-                    const active = selectedItem === hotspot.item
+                  {detail.callouts.map((callout) => {
+                    const matches = callout.items.some((item) =>
+                      matchingItems.has(item),
+                    )
+                    const dimmed = Boolean(normalizedQuery && !matches)
+                    const active = callout.items.includes(selectedItem)
+                    const pulsing = callout.items.includes(activePulseItem)
                     return (
                       <g
-                        key={`${hotspot.item}-${hotspot.x}-${hotspot.y}`}
+                        key={callout.id}
                         className={`exploded-callout ${active ? 'active' : ''} ${
-                          hotspot.synthetic ? 'synthetic' : ''
-                        }`}
-                        style={{ animationDelay: `${Math.min(index, 12) * 35}ms` }}
-                        onClick={() => setSelectedItem(hotspot.item)}
+                          pulsing ? 'pulsing' : ''
+                        } ${dimmed ? 'dimmed' : ''}`}
+                        onClick={() => selectItem(callout.items[0])}
                         role="button"
-                        tabIndex={0}
-                        aria-label={`Ricambio posizione ${hotspot.item}`}
+                        tabIndex={dimmed ? -1 : 0}
+                        aria-label={`Ricambi posizione ${callout.label}`}
                         onKeyDown={(event) => {
-                          if (event.key === 'Enter' || event.key === ' ') {
+                          if (!dimmed && (event.key === 'Enter' || event.key === ' ')) {
                             event.preventDefault()
-                            setSelectedItem(hotspot.item)
+                            selectItem(callout.items[0])
                           }
                         }}
                       >
-                        <circle className="exploded-callout-halo" cx={cx} cy={cy} r="22" />
-                        <circle className="exploded-callout-dot" cx={cx} cy={cy} r="16" />
+                        <line
+                          x1={callout.x}
+                          y1={callout.y}
+                          x2={callout.tipX}
+                          y2={callout.tipY}
+                        />
+                        <circle
+                          className="exploded-callout-tip"
+                          cx={callout.tipX}
+                          cy={callout.tipY}
+                          r="3.2"
+                        />
+                        <circle
+                          className="exploded-callout-dot"
+                          cx={callout.x}
+                          cy={callout.y}
+                          r="5.2"
+                        />
                         <text
-                          x={cx}
-                          y={cy}
+                          x={callout.x}
+                          y={callout.y}
                           dominantBaseline="central"
                           textAnchor="middle"
                         >
-                          {hotspot.item}
+                          {callout.label}
                         </text>
-                        <title>{`Pos. ${hotspot.item}`}</title>
                       </g>
                     )
                   })}
                 </svg>
               </div>
-            </div>
-
-            {!isPageLoading && !showDrawing && (
-              <div className="exploded-canvas exploded-canvas-fallback">
-                <svg
-                  className="exploded-fallback-board"
-                  viewBox="0 0 1000 1000"
-                  role="img"
-                  aria-label="Posizioni ricambio"
-                >
-                  <rect width="1000" height="1000" className="exploded-fallback-bg" />
-                  {hotspots.map((hotspot) => {
-                    const cx = hotspot.x * 1000
-                    const cy = hotspot.y * 1000
-                    const active = selectedItem === hotspot.item
-                    return (
-                      <g
-                        key={`${hotspot.item}-${hotspot.x}-${hotspot.y}`}
-                        className={`exploded-callout ${active ? 'active' : ''} synthetic`}
-                        onClick={() => setSelectedItem(hotspot.item)}
-                        role="button"
-                        tabIndex={0}
-                        aria-label={`Ricambio posizione ${hotspot.item}`}
-                        onKeyDown={(event) => {
-                          if (event.key === 'Enter' || event.key === ' ') {
-                            event.preventDefault()
-                            setSelectedItem(hotspot.item)
-                          }
-                        }}
-                      >
-                        <circle className="exploded-callout-halo" cx={cx} cy={cy} r="28" />
-                        <circle className="exploded-callout-dot" cx={cx} cy={cy} r="20" />
-                        <text
-                          x={cx}
-                          y={cy}
-                          dominantBaseline="central"
-                          textAnchor="middle"
-                        >
-                          {hotspot.item}
-                        </text>
-                      </g>
-                    )
-                  })}
-                </svg>
-                <p>
-                  {error ||
-                    'PDF non disponibile per questa tavola: usa i pallini per scegliere il ricambio.'}
-                </p>
+            )}
+            {!isPageLoading && detail?.view.assetType === 'png' && detail.imageUrl && (
+              <div className="exploded-raster-fallback">
+                <img src={detail.imageUrl} alt={`Tavola ${detail.view.title}`} />
+                <div aria-label="Posizioni non tracciabili">
+                  {detail.callouts.map((callout) => (
+                    <button
+                      key={callout.id}
+                      type="button"
+                      className={
+                        callout.items.includes(selectedItem) ? 'active' : ''
+                      }
+                      onClick={() => selectItem(callout.items[0])}
+                    >
+                      {callout.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+            {!isPageLoading && error && (
+              <div className="exploded-canvas-state">
+                <PackageOpen size={24} />
+                <span>{error}</span>
               </div>
             )}
           </div>
@@ -425,7 +384,9 @@ export default function ExplodedView() {
           </div>
           {selectedPart ? (
             <>
-              <span className="exploded-item-pill">Pos. {selectedPart.item || '—'}</span>
+              <span className="exploded-item-pill">
+                Pos. {selectedCallout?.label || selectedPart.item || '—'}
+              </span>
               <h3>{selectedPart.description}</h3>
               <p>{selectedPart.originalDescription}</p>
               <dl>
@@ -446,17 +407,20 @@ export default function ExplodedView() {
                   <dd>{selectedPart.page}</dd>
                 </div>
               </dl>
-              {selectedAssembly?.pdfAvailable && (
-                <a
-                  className="exploded-pdf-link"
-                  href={`/api/pdf?catalogId=${encodeURIComponent(
-                    selectedAssembly.catalogId,
-                  )}&page=${selectedAssembly.page}`}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  Apri pagina PDF
-                </a>
+              {selectedParts.length > 1 && (
+                <div className="exploded-multiple-parts">
+                  <span>Ricambi collegati alla stessa callout</span>
+                  {selectedParts.map((part) => (
+                    <button
+                      key={`${part.item}-${part.code}`}
+                      type="button"
+                      onClick={() => selectItem(part.item)}
+                    >
+                      <strong>Pos. {part.item}</strong>
+                      <span>{part.code}</span>
+                    </button>
+                  ))}
+                </div>
               )}
             </>
           ) : (
@@ -464,14 +428,28 @@ export default function ExplodedView() {
           )}
 
           <div className="exploded-item-list">
-            <span>Posizioni sulla tavola</span>
+            <label className="exploded-part-search">
+              <Search size={15} />
+              <input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="Cerca codice o descrizione"
+                aria-label="Cerca nella tavola"
+              />
+            </label>
+            <span>{visibleParts.length} posizioni sulla tavola</span>
             <div>
-              {activeParts.map((part) => (
+              {visibleParts.map((part: CatalogPart) => (
                 <button
                   key={`${part.item}-${part.code}-${part.page}`}
                   type="button"
+                  ref={(node) => {
+                    rowRefs.current[part.item] = node
+                  }}
                   className={selectedItem === part.item ? 'active' : ''}
-                  onClick={() => setSelectedItem(part.item)}
+                  onClick={() => selectItem(part.item)}
+                  onMouseEnter={() => setHoveredItem(part.item)}
+                  onMouseLeave={() => setHoveredItem('')}
                 >
                   <strong>{part.item || '—'}</strong>
                   <span>{part.code}</span>

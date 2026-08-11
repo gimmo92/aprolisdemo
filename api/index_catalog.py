@@ -20,9 +20,21 @@ from urllib.request import Request, urlopen
 import pymupdf as fitz
 
 try:
-    from .indexing import ExtractedPart, PageExtraction, select_adapter
+    from .indexing import (
+        ExtractedPart,
+        PageExtraction,
+        asset_rows,
+        extract_exploded_assets,
+        select_adapter,
+    )
 except ImportError:  # Allows local loading from inside the api directory.
-    from indexing import ExtractedPart, PageExtraction, select_adapter
+    from indexing import (
+        ExtractedPart,
+        PageExtraction,
+        asset_rows,
+        extract_exploded_assets,
+        select_adapter,
+    )
 
 
 DEFAULT_MAX_PDF_BYTES = 250 * 1024 * 1024
@@ -314,6 +326,91 @@ class SupabaseREST:
                 "La sostituzione atomica dei ricambi ha restituito un valore inatteso.",
             )
         return value
+
+    def replace_catalog_exploded_views(
+        self,
+        catalog_id: str,
+        views: list[dict[str, Any]],
+        callouts: list[dict[str, Any]],
+    ) -> int:
+        _, _, data = self._call(
+            "POST",
+            "/rest/v1/rpc/replace_catalog_exploded_views",
+            body={
+                "p_catalog_id": catalog_id,
+                "p_views": views,
+                "p_callouts": callouts,
+            },
+            headers={
+                "Content-Profile": "public",
+                "Accept-Profile": "public",
+                "Prefer": "return=representation",
+            },
+        )
+        value = _decode_json(data, "PostgREST/replace_catalog_exploded_views")
+        if not isinstance(value, int):
+            raise IndexingError(
+                502,
+                "SUPABASE_INVALID_RESPONSE",
+                "La sostituzione degli esplosi ha restituito un valore inatteso.",
+            )
+        return value
+
+    def upload_private_object(
+        self,
+        bucket: str,
+        storage_path: str,
+        content: bytes,
+        content_type: str,
+        content_encoding: str | None = None,
+    ) -> None:
+        if (
+            not storage_path
+            or storage_path.startswith("/")
+            or any(part in {"", ".", ".."} for part in storage_path.split("/"))
+        ):
+            raise IndexingError(
+                422,
+                "INVALID_STORAGE_PATH",
+                "Percorso asset esploso non valido.",
+            )
+        headers = {
+            "apikey": self.service_key,
+            "Authorization": f"Bearer {self.service_key}",
+            "Content-Type": content_type,
+            "Cache-Control": "public, max-age=31536000, immutable",
+            "x-upsert": "true",
+        }
+        if content_encoding:
+            headers["Content-Encoding"] = content_encoding
+        path = (
+            f"/storage/v1/object/{quote(bucket, safe='')}/"
+            f"{quote(storage_path, safe='/')}"
+        )
+        request = Request(
+            f"{self.url}{path}",
+            data=content,
+            headers=headers,
+            method="POST",
+        )
+        try:
+            with urlopen(request, timeout=max(self.timeout, 60)) as response:
+                response.read()
+        except HTTPError as error:
+            details = error.read()[:500].decode("utf-8", "replace")
+            raise IndexingError(
+                502 if error.code >= 500 else error.code,
+                "EXPLODED_ASSET_UPLOAD_FAILED",
+                "Upload dell'asset esploso non riuscito.",
+                {"status": error.code, "response": details},
+            ) from error
+        except (URLError, TimeoutError) as error:
+            raise IndexingError(
+                502,
+                "EXPLODED_ASSET_UPLOAD_FAILED",
+                "Storage degli esplosi non raggiungibile.",
+                {"reason": str(error)},
+            ) from error
 
     def download_private_object(self, bucket: str, storage_path: str) -> tuple[bytes, str]:
         if (
@@ -1666,6 +1763,9 @@ def _run_indexing(
     _catalog_update(client, catalog, {"status": "processing"})
     content, downloaded_mime = client.download_private_object(bucket, storage_path)
     checksum, document = _validate_pdf(content, downloaded_mime, catalog)
+    exploded_views: list[dict[str, Any]] = []
+    exploded_callouts: list[dict[str, Any]] = []
+    exploded_uploads: list[dict[str, Any]] = []
     try:
         detected_metadata = _detect_catalog_metadata(document, catalog)
         if detected_metadata.get("missing"):
@@ -1751,6 +1851,53 @@ def _run_indexing(
             },
         )
         parts, report, outcome = _extract(client, job, catalog, document, checksum)
+        if not report.get("remainingAiPages") or report.get("aiErrors"):
+            _job_update(
+                client,
+                job,
+                {
+                    "stage": "exploded_extraction",
+                    "progress": 90,
+                    "processed_items": 0,
+                    "total_items": len(parts),
+                },
+            )
+            machine = " ".join(
+                value
+                for value in (
+                    str(detected_metadata.get("brand") or _catalog_brand(catalog)).strip(),
+                    str(detected_metadata.get("model") or catalog.get("model") or "").strip(),
+                )
+                if value
+            ) or "Catalogo"
+            assets = extract_exploded_assets(
+                document,
+                parts,
+                catalog_id=str(catalog["id"]),
+                machine=machine,
+            )
+            exploded_views, exploded_callouts, exploded_uploads = asset_rows(
+                assets,
+                catalog_id=str(catalog["id"]),
+                checksum=checksum,
+            )
+            rates = [float(view["trace_rate"]) for view in exploded_views]
+            report["explodedViews"] = len(exploded_views)
+            report["interactiveExplodedViews"] = sum(
+                view["asset_type"] == "svg" for view in exploded_views
+            )
+            report["explodedTraceRate"] = (
+                round(sum(rates) / len(rates), 4) if rates else 0.0
+            )
+            report["explodedTraceRates"] = [
+                {
+                    "figureCode": view["figure_code"],
+                    "title": view["title"],
+                    "traceRate": view["trace_rate"],
+                    "assetType": view["asset_type"],
+                }
+                for view in exploded_views
+            ]
         page_count = document.page_count
     finally:
         document.close()
@@ -1765,6 +1912,37 @@ def _run_indexing(
     # Delete + insert run in one Postgres transaction. A bad row or transport
     # failure cannot leave a previously usable catalog partially replaced.
     accepted = client.replace_catalog_parts(str(catalog["id"]), rows)
+    if exploded_views:
+        exploded_bucket = os.environ.get(
+            "SUPABASE_EXPLODED_BUCKET", "exploded-views"
+        ).strip()
+        try:
+            for upload in exploded_uploads:
+                client.upload_private_object(
+                    exploded_bucket,
+                    str(upload["path"]),
+                    bytes(upload["content"]),
+                    str(upload["content_type"]),
+                    (
+                        str(upload["content_encoding"])
+                        if upload.get("content_encoding")
+                        else None
+                    ),
+                )
+            persisted_views = client.replace_catalog_exploded_views(
+                str(catalog["id"]),
+                exploded_views,
+                exploded_callouts,
+            )
+            report["persistedExplodedViews"] = persisted_views
+        except IndexingError as error:
+            # Deploying code before migration 002 must not make the parts index
+            # unusable. The admin report makes the missing asset schema explicit.
+            report["explodedError"] = {
+                "code": error.code,
+                "message": error.message,
+                "details": error.details,
+            }
     job["progress"] = 95
     _job_update(
         client,

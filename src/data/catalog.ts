@@ -7,6 +7,8 @@ export type Part = {
   page: number
   category: string
   keywords: string[]
+  catalogId?: string
+  viewId?: string
 }
 
 export type Catalog = {

@@ -8,7 +8,7 @@
     "dev:web": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "test": "vitest run",
+    "test": "vitest run && python3 -m unittest discover -s tests -p 'test_*.py'",
     "index:catalogs": "python scripts/index_catalogs.py",
     "import:supabase": "node scripts/import_catalog_index.mjs",
     "preview": "vite preview"
@@ -17,7 +17,6 @@
     "@anthropic-ai/sdk": "^0.116.0",
     "@supabase/supabase-js": "^2.112.2",
     "lucide-react": "^0.468.0",
-    "pdfjs-dist": "^6.2.108",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "tus-js-client": "^4.3.1",
