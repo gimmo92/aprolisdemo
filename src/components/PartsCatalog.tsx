@@ -282,7 +282,7 @@ export default function PartsCatalog({ serial }: Props) {
                   {part.pdfAvailable && partCatalogId && partCatalogId !== 'all-ready' ? (
                     <a
                       className="pdf-reference"
-                      href={`/api/pdf?catalogId=${encodeURIComponent(partCatalogId)}&page=${part.page}`}
+                      href={`/api/catalog?catalogId=${encodeURIComponent(partCatalogId)}&page=${part.page}`}
                       target="_blank"
                       rel="noreferrer"
                       title={`Apri ${documentName || 'PDF'} a pagina ${part.page}`}

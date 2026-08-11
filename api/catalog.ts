@@ -1,22 +1,50 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
+import { z } from 'zod'
 import {
   getAllBundledParts,
   getIndexStats,
   getPublicCatalog,
 } from './lib/retrieval.js'
-import { findSupabaseCatalog } from './lib/supabase-retrieval.js'
+import {
+  createSignedPdfUrl,
+  findSupabaseCatalog,
+} from './lib/supabase-retrieval.js'
 import { getSupabaseAdmin, isSupabaseConfigured } from './lib/supabase.js'
 
 export default async function handler(
   request: VercelRequest,
   response: VercelResponse,
 ) {
-  response.setHeader('Cache-Control', 'public, max-age=60, s-maxage=300')
-
   if (request.method !== 'GET') {
     response.setHeader('Allow', 'GET')
     return response.status(405).json({ error: 'Metodo non consentito.' })
   }
+
+  const catalogId =
+    typeof request.query.catalogId === 'string' ? request.query.catalogId : ''
+  if (catalogId) {
+    if (!z.string().uuid().safeParse(catalogId).success) {
+      return response.status(400).json({ error: 'Catalogo non valido.' })
+    }
+    const page = z.coerce
+      .number()
+      .int()
+      .positive()
+      .catch(1)
+      .parse(request.query.page)
+    try {
+      const signedUrl = await createSignedPdfUrl(catalogId)
+      if (!signedUrl) {
+        return response.status(404).json({ error: 'PDF non disponibile.' })
+      }
+      response.setHeader('Cache-Control', 'private, no-store')
+      return response.redirect(302, `${signedUrl}#page=${page}`)
+    } catch {
+      return response.status(500).json({ error: 'Impossibile aprire il PDF.' })
+    }
+  }
+
+  response.setHeader('Cache-Control', 'public, max-age=60, s-maxage=300')
 
   const serial = typeof request.query.serial === 'string' ? request.query.serial : ''
   if (!serial) {
