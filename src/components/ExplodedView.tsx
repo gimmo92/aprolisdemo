@@ -85,12 +85,16 @@ export default function ExplodedView({ selection, onSelectionChange }: Props) {
   useEffect(() => {
     if (selection?.viewId && views.some((view) => view.id === selection.viewId)) {
       setSelectedKey(selection.viewId)
-      return
     }
-    if (!visibleViews.some((view) => view.id === selectedKey)) {
-      setSelectedKey(visibleViews[0]?.id || '')
-    }
-  }, [selectedKey, selection?.viewId, views, visibleViews])
+  }, [selection?.viewId, views])
+
+  useEffect(() => {
+    setSelectedKey((current) =>
+      visibleViews.some((view) => view.id === current)
+        ? current
+        : visibleViews[0]?.id || '',
+    )
+  }, [visibleViews])
 
   useEffect(() => {
     if (!selectedKey) {
