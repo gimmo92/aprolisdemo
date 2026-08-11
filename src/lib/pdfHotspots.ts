@@ -1,79 +1,16 @@
-export type Hotspot = {
-  item: string
-  x: number
-  y: number
-  synthetic?: boolean
-}
+import pdfWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
+import { fallbackHotspots, type Hotspot } from './hotspotLayout'
+
+export type { Hotspot } from './hotspotLayout'
 
 const ITEM_RE = /^\d+(?:[.-]\d+)*(?:[A-Za-z])?$/
-const PDFJS_VERSION = '4.10.38'
-const PDFJS_CDN = `https://cdn.jsdelivr.net/npm/pdfjs-dist@${PDFJS_VERSION}`
-
 type PdfTextItem = {
   str?: string
   transform: number[]
 }
 
-type PdfPage = {
-  getViewport: (params: { scale: number }) => {
-    width: number
-    height: number
-  }
-  render: (params: {
-    canvasContext: CanvasRenderingContext2D
-    viewport: { width: number; height: number }
-  }) => { promise: Promise<void> }
-  getTextContent: () => Promise<{ items: Array<PdfTextItem | unknown> }>
-}
-
-type PdfDocument = {
-  numPages: number
-  getPage: (pageNumber: number) => Promise<PdfPage>
-  destroy: () => Promise<void>
-}
-
-type PdfJsModule = {
-  GlobalWorkerOptions: { workerSrc: string }
-  getDocument: (src: {
-    url: string
-    withCredentials?: boolean
-  }) => { promise: Promise<PdfDocument> }
-}
-
-let pdfjsLoader: Promise<PdfJsModule> | null = null
-
-function loadPdfJs() {
-  if (!pdfjsLoader) {
-    pdfjsLoader = import(
-      /* @vite-ignore */
-      `${PDFJS_CDN}/+esm`
-    ).then((module) => {
-      const pdfjs = module as PdfJsModule
-      pdfjs.GlobalWorkerOptions.workerSrc = `${PDFJS_CDN}/build/pdf.worker.min.mjs`
-      return pdfjs
-    })
-  }
-  return pdfjsLoader
-}
-
 function normalizeItem(value: string) {
   return value.trim().toUpperCase()
-}
-
-export function fallbackHotspots(items: string[]): Hotspot[] {
-  const unique = [...new Set(items.map(normalizeItem).filter(Boolean))]
-  const columns = unique.length > 8 ? 2 : 1
-  const rows = Math.max(1, Math.ceil(unique.length / columns))
-  return unique.map((item, index) => {
-    const column = index % columns
-    const row = Math.floor(index / columns)
-    return {
-      item,
-      x: 0.08 + column * 0.12,
-      y: 0.12 + ((row + 0.5) * 0.76) / rows,
-      synthetic: true,
-    }
-  })
 }
 
 export async function renderExplodedPage(
@@ -85,7 +22,8 @@ export async function renderExplodedPage(
   const items = new Set(
     itemNumbers.map(normalizeItem).filter((item) => ITEM_RE.test(item)),
   )
-  const pdfjs = await loadPdfJs()
+  const pdfjs = await import('pdfjs-dist')
+  pdfjs.GlobalWorkerOptions.workerSrc = pdfWorker
   const loadingTask = pdfjs.getDocument({
     url: pdfUrl,
     withCredentials: false,
@@ -97,11 +35,9 @@ export async function renderExplodedPage(
     }
     const page = await pdf.getPage(pageNumber)
     const viewport = page.getViewport({ scale: 1.45 })
-    const context = canvas.getContext('2d')
-    if (!context) throw new Error('Canvas non disponibile.')
     canvas.width = Math.floor(viewport.width)
     canvas.height = Math.floor(viewport.height)
-    await page.render({ canvasContext: context, viewport }).promise
+    await page.render({ canvas, viewport }).promise
 
     const text = await page.getTextContent()
     const scored = new Map<string, { score: number; x: number; y: number }>()
@@ -112,8 +48,12 @@ export async function renderExplodedPage(
       const token = normalizeItem(item.str)
       if (!items.has(token)) continue
       const transform = item.transform
-      const tx = transform[4] / viewport.width
-      const ty = 1 - transform[5] / viewport.height
+      const [viewportX, viewportY] = viewport.convertToViewportPoint(
+        transform[4],
+        transform[5],
+      )
+      const tx = viewportX / viewport.width
+      const ty = viewportY / viewport.height
       let score = 0
       if (ty < 0.68) score += 3
       if (tx < 0.62) score += 2
@@ -145,6 +85,6 @@ export async function renderExplodedPage(
     }
     return hotspots
   } finally {
-    await pdf.destroy()
+    await loadingTask.destroy()
   }
 }

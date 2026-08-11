@@ -13,10 +13,10 @@ import {
   type CatalogPart,
 } from '../lib/api'
 import {
-  fallbackHotspots,
   renderExplodedPage,
   type Hotspot,
 } from '../lib/pdfHotspots'
+import { fallbackHotspots } from '../lib/hotspotLayout'
 
 type AssemblyGroup = {
   key: string

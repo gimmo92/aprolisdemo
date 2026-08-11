@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { fallbackHotspots } from './pdfHotspots'
+import { fallbackHotspots } from './hotspotLayout'
 
 describe('fallbackHotspots', () => {
   it('places unique item markers in normalized coordinates', () => {
