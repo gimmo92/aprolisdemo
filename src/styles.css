@@ -1902,6 +1902,7 @@ button {
   width: 100%;
   max-width: 100%;
   line-height: 0;
+  pointer-events: none;
 }
 
 .exploded-svg-art > svg {
@@ -1910,6 +1911,7 @@ button {
   height: auto;
   max-height: min(72vh, 820px);
   background: white;
+  pointer-events: none;
 }
 
 .exploded-hotspot-layer {
@@ -1936,10 +1938,17 @@ button {
   transition: opacity 180ms ease;
 }
 
+.exploded-callout-hit {
+  fill: transparent;
+  stroke: transparent;
+  pointer-events: auto;
+}
+
 .exploded-callout line {
   stroke: #0b5fad;
   stroke-width: 1.3;
   vector-effect: non-scaling-stroke;
+  pointer-events: none;
 }
 
 .exploded-callout-dot {
@@ -1951,6 +1960,7 @@ button {
   transition: fill 160ms ease, transform 160ms ease;
   transform-box: fill-box;
   transform-origin: center;
+  pointer-events: none;
 }
 
 .exploded-callout text {
@@ -1964,6 +1974,7 @@ button {
   fill: #0b5fad;
   transform-box: fill-box;
   transform-origin: center;
+  pointer-events: none;
 }
 
 .exploded-callout:hover .exploded-callout-dot,

@@ -34,6 +34,16 @@ function normalize(value: string) {
     .trim()
 }
 
+function normalizeItem(value: string | number | undefined | null) {
+  const text = String(value ?? '')
+    .trim()
+    .replace(/\s+/g, '')
+  if (!text) return ''
+  const asNumber = Number(text.replace(',', '.'))
+  if (Number.isFinite(asNumber)) return String(asNumber)
+  return text.toUpperCase()
+}
+
 export default function ExplodedView({ selection, onSelectionChange }: Props) {
   const [views, setViews] = useState<ExplodedViewSummary[]>([])
   const [detail, setDetail] = useState<ExplodedViewResponse>()
@@ -136,9 +146,26 @@ export default function ExplodedView({ selection, onSelectionChange }: Props) {
     }
   }, [detail?.parts, selectedKey, selection])
 
+  const resolvePartItem = (candidate: string) => {
+    const key = normalizeItem(candidate)
+    if (!key) return ''
+    const match = detail?.parts.find(
+      (part) => normalizeItem(part.item) === key,
+    )
+    return match?.item || candidate
+  }
+
   const selectItem = (item: string) => {
-    setSelectedItem(item)
-    onSelectionChange?.({ viewId: selectedKey, item })
+    const resolved = resolvePartItem(item)
+    if (!resolved) return
+    setSelectedItem(resolved)
+    onSelectionChange?.({ viewId: selectedKey, item: resolved })
+  }
+
+  const selectCallout = (items: string[]) => {
+    const resolved =
+      items.map(resolvePartItem).find(Boolean) || items[0] || ''
+    selectItem(resolved)
   }
 
   useEffect(() => {
@@ -158,19 +185,24 @@ export default function ExplodedView({ selection, onSelectionChange }: Props) {
               `${part.item} ${part.code} ${part.description} ${part.originalDescription}`,
             ).includes(normalizedQuery),
           )
-          .map((part) => part.item),
+          .map((part) => normalizeItem(part.item)),
       ),
     [detail?.parts, normalizedQuery],
   )
   const visibleParts = (detail?.parts || []).filter(
-    (part) => !normalizedQuery || matchingItems.has(part.item),
+    (part) =>
+      !normalizedQuery || matchingItems.has(normalizeItem(part.item)),
   )
+  const selectedKeyItem = normalizeItem(selectedItem)
   const selectedCallout = detail?.callouts.find((callout) =>
-    callout.items.includes(selectedItem),
+    callout.items.some((item) => normalizeItem(item) === selectedKeyItem),
   )
   const selectedItems = selectedCallout?.items || [selectedItem]
+  const selectedItemKeys = new Set(selectedItems.map(normalizeItem))
   const selectedParts =
-    detail?.parts.filter((part) => selectedItems.includes(part.item)) || []
+    detail?.parts.filter((part) =>
+      selectedItemKeys.has(normalizeItem(part.item)),
+    ) || []
   const selectedPart = selectedParts[0] || detail?.parts[0]
   const selectedIndex = Math.max(
     0,
@@ -296,34 +328,49 @@ export default function ExplodedView({ selection, onSelectionChange }: Props) {
                   aria-label="Posizioni cliccabili sull’esploso"
                 >
                   {detail.callouts.map((callout) => {
-                    const matches = callout.items.some((item) =>
+                    const calloutKeys = callout.items.map(normalizeItem)
+                    const matches = calloutKeys.some((item) =>
                       matchingItems.has(item),
                     )
                     const dimmed = Boolean(normalizedQuery && !matches)
-                    const active = callout.items.includes(selectedItem)
-                    const pulsing = callout.items.includes(activePulseItem)
+                    const active = calloutKeys.includes(selectedKeyItem)
+                    const pulsing = calloutKeys.includes(
+                      normalizeItem(activePulseItem),
+                    )
                     return (
                       <g
                         key={callout.id}
                         className={`exploded-callout ${active ? 'active' : ''} ${
                           pulsing ? 'pulsing' : ''
                         } ${dimmed ? 'dimmed' : ''}`}
-                        onClick={() => selectItem(callout.items[0])}
+                        onClick={() => selectCallout(callout.items)}
                         role="button"
                         tabIndex={dimmed ? -1 : 0}
-                        aria-label={`Ricambi posizione ${callout.label}`}
+                        aria-label={`Apri ricambio posizione ${callout.label}`}
                         onKeyDown={(event) => {
                           if (!dimmed && (event.key === 'Enter' || event.key === ' ')) {
                             event.preventDefault()
-                            selectItem(callout.items[0])
+                            selectCallout(callout.items)
                           }
                         }}
                       >
+                        <circle
+                          className="exploded-callout-hit"
+                          cx={callout.x}
+                          cy={callout.y}
+                          r="11"
+                        />
                         <line
                           x1={callout.x}
                           y1={callout.y}
                           x2={callout.tipX}
                           y2={callout.tipY}
+                        />
+                        <circle
+                          className="exploded-callout-hit"
+                          cx={callout.tipX}
+                          cy={callout.tipY}
+                          r="8"
                         />
                         <circle
                           className="exploded-callout-tip"
@@ -362,7 +409,7 @@ export default function ExplodedView({ selection, onSelectionChange }: Props) {
                       className={
                         callout.items.includes(selectedItem) ? 'active' : ''
                       }
-                      onClick={() => selectItem(callout.items[0])}
+                      onClick={() => selectCallout(callout.items)}
                     >
                       {callout.label}
                     </button>
