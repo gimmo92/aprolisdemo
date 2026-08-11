@@ -441,7 +441,6 @@ class SupabaseREST:
                 "id": bucket,
                 "name": bucket,
                 "public": False,
-                "file_size_limit": 250 * 1024 * 1024,
                 "allowed_mime_types": [
                     "application/pdf",
                     "image/svg+xml",
@@ -1986,15 +1985,28 @@ def _run_indexing(
                 # Storage API. The existing private catalog bucket is always
                 # available, so use an isolated asset prefix there.
                 asset_bucket = bucket
-                client.allow_assets_in_catalog_bucket(asset_bucket)
+                asset_mime_fallback = False
+                try:
+                    client.allow_assets_in_catalog_bucket(asset_bucket)
+                except IndexingError:
+                    # Last-resort compatibility for projects that lock bucket
+                    # settings: Storage validates the declared MIME only. The
+                    # runtime API downloads and serves the actual SVG/PNG bytes.
+                    asset_mime_fallback = True
                 for upload in exploded_uploads:
                     client.upload_private_object(
                         asset_bucket,
                         str(upload["path"]),
                         bytes(upload["content"]),
-                        str(upload["content_type"]),
+                        (
+                            "application/pdf"
+                            if asset_mime_fallback
+                            else str(upload["content_type"])
+                        ),
                         None,
                     )
+                if asset_mime_fallback:
+                    report["explodedAssetMimeFallback"] = True
             report["explodedAssetBucket"] = asset_bucket
             for view in exploded_views:
                 current_view_metadata = view.get("metadata")

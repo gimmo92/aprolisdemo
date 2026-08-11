@@ -224,21 +224,22 @@ export default async function handler(
       if (bytes[0] === 0x1f && bytes[1] === 0x8b) bytes = gunzipSync(bytes)
       svg = stripUnsafeSvg(bytes.toString('utf8'))
     } else {
-      let signError: unknown
+      let asset: Blob | null = null
+      let assetError: unknown
       for (const bucket of assetBuckets) {
-        const result = await supabase.storage
-          .from(bucket)
-          .createSignedUrl(view.svg_path, 3600)
+        const result = await supabase.storage.from(bucket).download(view.svg_path)
         if (result.data) {
-          imageUrl = result.data.signedUrl
-          signError = undefined
+          asset = result.data
+          assetError = undefined
           break
         }
-        signError = result.error
+        assetError = result.error
       }
-      if (signError || !imageUrl) {
-        throw signError || new Error('Immagine non disponibile')
+      if (assetError || !asset) {
+        throw assetError || new Error('Immagine non disponibile')
       }
+      const bytes = Buffer.from(await asset.arrayBuffer())
+      imageUrl = `data:image/png;base64,${bytes.toString('base64')}`
     }
 
     response.setHeader('Cache-Control', 'public, max-age=300, s-maxage=3600')
