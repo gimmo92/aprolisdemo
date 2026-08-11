@@ -21,15 +21,19 @@ riservati. Lo script `scripts/index_catalogs.py` genera l'indice distribuibile
 ## Architettura
 
 1. Supabase Auth e RLS proteggono la tab **Gestione cataloghi**.
-2. I PDF restano nel bucket privato `catalogs`; il browser usa upload TUS da 6 MB.
+2. I PDF restano nel bucket privato `catalogs`; il browser usa upload TUS da 6 MB
+   solo per l'ingestione.
    L'amministratore seleziona solo il file: brand, modello, versione, revisione,
    cliente, ordine e matricole vengono riconosciuti dal documento.
 3. `POST /api/index_catalog` valida e indicizza Charlatte, Hangcha, Movexx e
    Fiorentini con parser deterministici e fallback Claude per metadati o pagine
    dubbie.
-4. `GET /api/catalog`, `GET /api/parts` e il tool di `POST /api/chat` leggono
+4. Durante l'indicizzazione PyMuPDF estrae gli esplosi come SVG sanitizzati,
+   callout e fallback PNG. Gli asset sono persistiti nel bucket privato
+   `exploded-views`; il PDF non viene mai inviato al browser a runtime.
+5. `GET /api/catalog`, `GET /api/parts` e il tool di `POST /api/chat` leggono
    Postgres, filtrati per matricola. L'indice JSON resta un fallback temporaneo.
-5. `GET /api/pdf` crea un URL firmato di cinque minuti e apre la pagina citata.
+6. `GET /api/exploded` restituisce esclusivamente SVG/PNG e geometria JSON.
 
 ## Avvio locale
 
@@ -89,9 +93,13 @@ npx vercel env pull .env.local
    `supabase/seed.sql` per promuovere quell'utente ad amministratore;
 4. configurare le quattro variabili Supabase su Vercel e ridistribuire.
 
-La migration crea tabelle, indici full-text, bucket privato, policy RLS e RPC
-server-side. L'upload è limitato a PDF da 250 MB. Il job termina `ready`,
-`needs_review` oppure `failed`, con report e pagine da verificare.
+Le migration creano tabelle, indici full-text, bucket privati, policy RLS e RPC
+server-side. `002_exploded_views.sql` aggiunge gli asset SVG/PNG e le callout.
+L'upload è limitato a PDF da 250 MB. Il job termina `ready`, `needs_review`
+oppure `failed`, con report, pagine da verificare e qualità `traceRate`.
+
+Dopo l'applicazione della migration 002, reindicizzare i cataloghi già presenti
+dalla tab **Gestione cataloghi** per generare gli esplosi persistiti.
 
 ### Import dell'indice T135 esistente
 
