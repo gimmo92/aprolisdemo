@@ -169,13 +169,6 @@ export default function ExplodedView({ selection, onSelectionChange }: Props) {
     selectItem(resolved)
   }
 
-  useEffect(() => {
-    rowRefs.current[selectedItem]?.scrollIntoView({
-      block: 'nearest',
-      behavior: 'smooth',
-    })
-  }, [selectedItem])
-
   const normalizedQuery = normalize(query)
   const matchingItems = useMemo(
     () =>
