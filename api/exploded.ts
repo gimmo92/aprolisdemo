@@ -101,24 +101,29 @@ export default async function handler(
 
   try {
     if (!rawViewId) {
-      const { data, error } = await supabase
-        .from('exploded_views')
-        .select(
-          'id, catalog_id, machine, figure_code, title, page_index, parts_pages, svg_path, asset_type, view_w, view_h, trace_rate, catalogs!inner(status)',
-        )
-        .eq('catalogs.status', 'ready')
-        .order('machine')
-        .order('title')
-      if (error && error.code !== '42P01' && error.code !== 'PGRST205') {
-        throw error
-      }
       const { data: catalogs, error: catalogError } = await supabase
         .from('catalogs')
         .select('id, metadata')
         .eq('status', 'ready')
       if (catalogError) throw catalogError
+      const readyIds = (catalogs || []).map((catalog) => catalog.id)
+      let normalizedRows: ExplodedRow[] = []
+      if (readyIds.length) {
+        const { data, error } = await supabase
+          .from('exploded_views')
+          .select(
+            'id, catalog_id, machine, figure_code, title, page_index, parts_pages, svg_path, asset_type, view_w, view_h, trace_rate',
+          )
+          .in('catalog_id', readyIds)
+          .order('machine')
+          .order('title')
+        if (error && error.code !== '42P01' && error.code !== 'PGRST205') {
+          throw error
+        }
+        normalizedRows = (data || []) as ExplodedRow[]
+      }
       const merged = new Map<string, ExplodedRow>()
-      for (const row of (data || []) as ExplodedRow[]) merged.set(row.id, row)
+      for (const row of normalizedRows) merged.set(row.id, row)
       for (const row of metadataViews(catalogs || [])) {
         if (!merged.has(row.id)) merged.set(row.id, row)
       }
@@ -135,10 +140,9 @@ export default async function handler(
     const { data, error } = await supabase
       .from('exploded_views')
       .select(
-        'id, catalog_id, machine, figure_code, title, page_index, parts_pages, svg_path, asset_type, view_w, view_h, trace_rate, catalogs!inner(status)',
+        'id, catalog_id, machine, figure_code, title, page_index, parts_pages, svg_path, asset_type, view_w, view_h, trace_rate',
       )
       .eq('id', parsed.data)
-      .eq('catalogs.status', 'ready')
       .maybeSingle()
     let view = data as ExplodedRow | null
     if (error && error.code !== '42P01' && error.code !== 'PGRST205') {
@@ -153,6 +157,15 @@ export default async function handler(
       view =
         metadataViews(catalogs || []).find((candidate) => candidate.id === parsed.data) ||
         null
+    }
+    if (view) {
+      const { data: catalog } = await supabase
+        .from('catalogs')
+        .select('status')
+        .eq('id', view.catalog_id)
+        .eq('status', 'ready')
+        .maybeSingle()
+      if (!catalog) view = null
     }
     if (!view) {
       return response.status(404).json({ error: 'Tavola non disponibile.' })

@@ -6,7 +6,6 @@ into sanitized assets plus persisted callout geometry during ingestion.
 
 from __future__ import annotations
 
-import gzip
 import html
 import math
 import re
@@ -286,7 +285,7 @@ def _svg_asset(page: fitz.Page, clip: fitz.Rect) -> bytes:
         svg = page.get_svg_image(matrix=fitz.Identity, text_as_path=False)
     finally:
         page.set_cropbox(original)
-    return gzip.compress(sanitize_svg(svg).encode("utf-8"), compresslevel=9)
+    return sanitize_svg(svg).encode("utf-8")
 
 
 def _png_asset(page: fitz.Page, clip: fitz.Rect) -> bytes:
@@ -378,9 +377,9 @@ def extract_exploded_assets(
                 page_index=page.number + 1,
                 parts_pages=pages,
                 asset_type=asset_type,
-                extension="svg.gz" if interactive else "png",
+                extension="svg" if interactive else "png",
                 content_type="image/svg+xml" if interactive else "image/png",
-                content_encoding="gzip" if interactive else None,
+                content_encoding=None,
                 content=content,
                 view_w=round(clip.width, 2),
                 view_h=round(clip.height, 2),

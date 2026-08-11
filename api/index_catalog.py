@@ -378,11 +378,9 @@ class SupabaseREST:
             "apikey": self.service_key,
             "Authorization": f"Bearer {self.service_key}",
             "Content-Type": content_type,
-            "Cache-Control": "public, max-age=31536000, immutable",
+            "Cache-Control": "max-age=31536000",
             "x-upsert": "true",
         }
-        # Supabase Storage currently ignores Content-Encoding metadata. Keep the
-        # object gzipped at rest and let /api/exploded detect/decompress it.
         _ = content_encoding
         path = (
             f"/storage/v1/object/{quote(bucket, safe='')}/"
