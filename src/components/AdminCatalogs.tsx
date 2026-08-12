@@ -99,38 +99,6 @@ function statusLabel(status: string) {
   return labels[status] || status
 }
 
-function reportSummary(
-  job: NonNullable<AdminCatalog['ingestion_jobs']>[number] | undefined,
-) {
-  const report = job?.report
-  // Per ora non mostriamo errori Claude/aiErrors in lista (es. ANTHROPIC_INVALID_JSON).
-  if (report?.unresolvedPages?.length) {
-    const preview = report.unresolvedPages.slice(0, 5).join(', ')
-    return `${report.unresolvedPages.length} pagine non risolte (${preview}${report.unresolvedPages.length > 5 ? ', …' : ''})`
-  }
-  if (report?.detectedMetadata?.missing?.length) {
-    return `Metadati mancanti: ${report.detectedMetadata.missing.join(', ')}`
-  }
-  if (report?.aiParts !== undefined) {
-    const extraction = `Estrazione: ${report.deterministicParts || 0} deterministici + ${report.aiParts} Claude`
-    return report.explodedError
-      ? `${extraction} · Ricambi salvati; per gli esplosi applica la migration 002`
-      : extraction
-  }
-  if (report?.explodedError) {
-    return 'Ricambi salvati; per gli esplosi applica la migration 002'
-  }
-  return ''
-}
-
-function visibleJobError(message?: string) {
-  if (!message) return ''
-  if (/ANTHROPIC_INVALID_JSON|Anthropic non ha restituito/i.test(message)) {
-    return ''
-  }
-  return message
-}
-
 function isStaleJob(
   job: NonNullable<AdminCatalog['ingestion_jobs']>[number] | undefined,
 ) {
@@ -298,9 +266,7 @@ export function AdminCatalogs() {
       setMessage('Indicizzazione in corso…')
       const indexed = await runIndexing(created.catalogId, created.jobId)
       setMessage(
-        indexed.status === 'needs_review'
-          ? 'Indicizzazione completata: alcune pagine richiedono verifica.'
-          : `Catalogo pronto: ${indexed.accepted || 0} ricambi indicizzati.`,
+        `Catalogo pronto: ${indexed.accepted || 0} ricambi indicizzati.`,
       )
       setFile(undefined)
       setProgress(0)
@@ -338,14 +304,8 @@ export function AdminCatalogs() {
     setMessage(`Nuova indicizzazione di ${catalog.original_filename}…`)
     try {
       const payload = await runIndexing(catalog.id, retryableJob.id)
-      const detail = reportSummary({
-        id: retryableJob.id,
-        status: payload.status || 'needs_review',
-        progress: 100,
-        report: payload.report,
-      })
       setMessage(
-        `Catalogo aggiornato: ${payload.accepted || 0} ricambi indicizzati.${detail ? ` ${detail}.` : ''}`,
+        `Catalogo aggiornato: ${payload.accepted || 0} ricambi indicizzati.`,
       )
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Indicizzazione non riuscita.')
@@ -436,7 +396,6 @@ export function AdminCatalogs() {
           const bundled = catalog.source === 'bundled' || catalog.id.startsWith('bundled:')
           const job = catalog.ingestion_jobs?.at(0)
           const stale = !bundled && isStaleJob(job)
-          const jobError = bundled ? '' : visibleJobError(job?.error_message)
           const state = bundled
             ? 'ready'
             : ['ready', 'needs_review', 'failed'].includes(catalog.status)
@@ -455,15 +414,6 @@ export function AdminCatalogs() {
               <div className="admin-catalog-main">
                 <strong>{catalog.brand} · {catalog.model}</strong>
                 <span>{catalog.original_filename}</span>
-                {jobError ? (
-                  <small className="index-error">{jobError}</small>
-                ) : null}
-                {job?.report?.explodedError && (
-                  <small className="index-error">
-                    Esplosi [{job.report.explodedError.code || 'errore'}]:{' '}
-                    {job.report.explodedError.message || 'asset non salvati'}
-                  </small>
-                )}
               </div>
               <div className="admin-catalog-meta">
                 <span className="status-badge">
