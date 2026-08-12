@@ -103,14 +103,7 @@ function reportSummary(
   job: NonNullable<AdminCatalog['ingestion_jobs']>[number] | undefined,
 ) {
   const report = job?.report
-  const aiError = report?.aiErrors?.[0]
-  if (aiError) {
-    const upstream =
-      aiError.details?.response?.error?.message ||
-      aiError.details?.response?.message ||
-      aiError.details?.reason
-    return `Claude${aiError.code ? ` [${aiError.code}]` : ''}: ${upstream || aiError.message || 'errore non specificato'}`
-  }
+  // Per ora non mostriamo errori Claude/aiErrors in lista (es. ANTHROPIC_INVALID_JSON).
   if (report?.unresolvedPages?.length) {
     const preview = report.unresolvedPages.slice(0, 5).join(', ')
     return `${report.unresolvedPages.length} pagine non risolte (${preview}${report.unresolvedPages.length > 5 ? ', …' : ''})`
@@ -128,6 +121,14 @@ function reportSummary(
     return 'Ricambi salvati; per gli esplosi applica la migration 002'
   }
   return ''
+}
+
+function visibleJobError(message?: string) {
+  if (!message) return ''
+  if (/ANTHROPIC_INVALID_JSON|Anthropic non ha restituito/i.test(message)) {
+    return ''
+  }
+  return message
 }
 
 function isStaleJob(
@@ -442,6 +443,7 @@ export function AdminCatalogs() {
                   : ''
               }`
             : reportSummary(job)
+          const jobError = bundled ? '' : visibleJobError(job?.error_message)
           const state = bundled
             ? 'ready'
             : ['ready', 'needs_review', 'failed'].includes(catalog.status)
@@ -460,8 +462,8 @@ export function AdminCatalogs() {
               <div className="admin-catalog-main">
                 <strong>{catalog.brand} · {catalog.model}</strong>
                 <span>{catalog.original_filename}</span>
-                {job?.error_message && !bundled ? (
-                  <small className="index-error">{job.error_message}</small>
+                {jobError ? (
+                  <small className="index-error">{jobError}</small>
                 ) : (
                   summary && <small className="review-summary">{summary}</small>
                 )}
