@@ -9,6 +9,7 @@ from .adapters import (
     HangchaAdapter,
     MovexxAdapter,
     PageExtraction,
+    is_callout_code,
     select_adapter,
 )
 from .exploded import asset_rows, extract_exploded_assets
@@ -22,6 +23,7 @@ __all__ = [
     "HangchaAdapter",
     "MovexxAdapter",
     "PageExtraction",
+    "is_callout_code",
     "select_adapter",
     "asset_rows",
     "extract_exploded_assets",

@@ -19,6 +19,17 @@ type PartWithCatalog = IndexedPart & {
   pdfAvailable?: boolean
 }
 
+/** Pallini esploso (31, 31.2, 12A): non sono codici ricambio. */
+function isCalloutOnlyCode(code: string | undefined) {
+  const value = String(code || '').trim().replace(/\s+/g, '')
+  if (!value) return true
+  if (/^\d+$/.test(value)) return value.length <= 3
+  return (
+    /^\d{1,3}(?:[.\-]\d{1,3})+[A-Za-z]?$/i.test(value) ||
+    /^\d{1,3}[A-Za-z]$/i.test(value)
+  )
+}
+
 type PartsResult = {
   catalog: PublicCatalog
   parts: PartWithCatalog[]
@@ -126,7 +137,9 @@ export default async function handler(
     })
   }
 
-  const parts = result.parts.map((part) => ({
+  const parts = result.parts
+    .filter((part) => !isCalloutOnlyCode(part.code))
+    .map((part) => ({
     code: part.code,
     description: part.description,
     originalDescription: part.originalDescription,
@@ -155,6 +168,7 @@ export default async function handler(
   return response.status(200).json({
     catalog: {
       ...result.catalog,
+      partCount: parts.length,
       pdfAvailable: Boolean(result.storagePath),
     },
     parts,

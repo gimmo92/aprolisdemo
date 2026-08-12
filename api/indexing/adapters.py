@@ -75,7 +75,27 @@ def _as_quantity(value: str) -> int | float | None:
 
 def _valid_code(value: str) -> bool:
     value = value.strip()
-    return CODE_RE.fullmatch(value) is not None and not value.isdigit()
+    if not value or value.isdigit():
+        return False
+    # Pallini/esplosi (31, 31.2, 12A): non sono codici ricambio.
+    if is_callout_code(value):
+        return False
+    return CODE_RE.fullmatch(value) is not None
+
+
+def is_callout_code(value: str) -> bool:
+    """True when the value is only a diagram balloon / position marker."""
+    text = clean_text(value).replace(" ", "")
+    if not text:
+        return True
+    # Codici OEM numerici lunghi (es. 336783) non sono pallini.
+    if text.isdigit():
+        return len(text) <= 3
+    # 31.2, 3-1, 12A, 1.2.3
+    return (
+        re.fullmatch(r"\d{1,3}(?:[.\-]\d{1,3})+[A-Za-z]?", text) is not None
+        or re.fullmatch(r"\d{1,3}[A-Za-z]", text) is not None
+    )
 
 
 @dataclass(frozen=True)

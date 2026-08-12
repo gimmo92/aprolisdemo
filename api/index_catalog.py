@@ -25,6 +25,7 @@ try:
         PageExtraction,
         asset_rows,
         extract_exploded_assets,
+        is_callout_code,
         select_adapter,
     )
 except ImportError:  # Allows local loading from inside the api directory.
@@ -33,6 +34,7 @@ except ImportError:  # Allows local loading from inside the api directory.
         PageExtraction,
         asset_rows,
         extract_exploded_assets,
+        is_callout_code,
         select_adapter,
     )
 
@@ -1058,6 +1060,9 @@ def _anthropic_parts_batch(
         "For each image, set page_number EXACTLY to the Source page_number shown "
         "immediately before that image (not 1..N and not printed catalog page labels). "
         "Codes may be numeric or alphanumeric; strip spaces inside codes. "
+        "Never use diagram balloon/callout numbers (like 31, 31.2, 12A) as the part "
+        "code — put those only in item/position. Skip a row if the real part code "
+        "is missing. "
         "Return an empty parts array only when none of the images has a parts table."
     )
     content: list[dict[str, Any]] = []
@@ -1272,7 +1277,7 @@ def _anthropic_parts_batch(
             elif page_number is None and len(source_pages) == 1:
                 page_number = next(iter(source_pages))
 
-        if not code or not AI_CODE_RE.fullmatch(code):
+        if not code or not AI_CODE_RE.fullmatch(code) or is_callout_code(code):
             reject("invalid_code", code_raw)
             continue
         if not description:
