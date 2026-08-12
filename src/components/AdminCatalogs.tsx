@@ -272,7 +272,7 @@ export function AdminCatalogs() {
       }
 
       setMessage('Indicizzazione in corso…')
-      const indexed = await runIndexing(created.catalogId, created.jobId)
+      await runIndexing(created.catalogId, created.jobId)
       setMessage('Indicizzazione completata.')
       setFile(undefined)
       setProgress(0)
@@ -309,7 +309,7 @@ export function AdminCatalogs() {
     setBusy(true)
     setMessage(`Nuova indicizzazione di ${catalog.original_filename}…`)
     try {
-      const payload = await runIndexing(catalog.id, retryableJob.id)
+      await runIndexing(catalog.id, retryableJob.id)
       setMessage('Indicizzazione completata.')
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Indicizzazione non riuscita.')
