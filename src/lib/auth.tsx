@@ -10,6 +10,7 @@ import {
 } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import { LoaderCircle } from 'lucide-react'
+import { BrandMark } from '../components/BrandMark'
 import { supabase } from './supabase'
 
 type AuthContextValue = {
@@ -92,13 +93,7 @@ function LoginScreen() {
   return (
     <main className="app-shell app-login-shell">
       <section className="app-auth">
-        <img
-          className="brand-logo brand-logo-login"
-          src="/aestima-logo.png"
-          alt="aestima"
-          width={220}
-          height={52}
-        />
+        <BrandMark size="lg" className="brand-mark-login" />
         <p>Accedi per usare chat, catalogo, esplosi e gestione.</p>
         <form onSubmit={authenticate}>
           <input

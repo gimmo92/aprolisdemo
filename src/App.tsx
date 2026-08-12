@@ -25,6 +25,7 @@ import ExplodedView, {
   type ExplodedSelection,
 } from './components/ExplodedView'
 import { AdminCatalogs } from './components/AdminCatalogs'
+import { BrandMark } from './components/BrandMark'
 import {
   ApiError,
   askPartsAssistant,
@@ -114,20 +115,6 @@ function residualSearchQuery(raw: string, matchedLabel: string) {
   return kept.join(' ').trim()
 }
 
-function BrandMark() {
-  return (
-    <a className="brand-mark" href="/" aria-label="Aestima Parts Finder">
-      <img
-        className="brand-logo"
-        src="/aestima-logo.png"
-        alt="aestima"
-        width={168}
-        height={40}
-      />
-      <span className="brand-product">Parts Finder</span>
-    </a>
-  )
-}
 
 function PartCard({
   part,
@@ -407,7 +394,7 @@ function App() {
   return (
     <main className="app-shell">
       <header className="topbar">
-        <BrandMark />
+        <BrandMark href="/" showProduct />
         <div className="topbar-right">
           <span className="status-chip">
             <span className="status-dot" />
