@@ -1622,40 +1622,6 @@ def _extract(
     deterministic_parts: list[ExtractedPart] = []
     page_count = document.page_count
 
-    for page_index in range(page_count):
-        result = adapter.extract_page(document[page_index], page_index + 1)
-        page_results.append(result)
-        deterministic_parts.extend(result.parts)
-        if page_index == page_count - 1 or (page_index + 1) % 10 == 0:
-            progress = 10 + int(((page_index + 1) / page_count) * 50)
-            job["progress"] = progress
-            _job_update(
-                client,
-                job,
-                {
-                    "stage": "deterministic_extraction",
-                    "progress": progress,
-                    "processed_items": page_index + 1,
-                    "total_items": page_count,
-                },
-            )
-
-    suspect_indexes = [
-        index
-        for index, result in enumerate(page_results)
-        if result.text_characters < MIN_TEXT_CHARACTERS
-        or (bool(result.parts) and result.confidence < MIN_PAGE_CONFIDENCE)
-        or "unparsed_table" in result.reasons
-        or "sparse_table" in result.reasons
-    ]
-    # Pages with actual low-confidence rows have priority over image-only pages.
-    suspect_indexes.sort(
-        key=lambda index: (
-            not bool(page_results[index].parts),
-            page_results[index].confidence,
-            index,
-        )
-    )
     previous_report = job.get("report")
     if not isinstance(previous_report, dict):
         previous_report = {}
@@ -1673,10 +1639,81 @@ def _extract(
             for page in previous_report.get("unresolvedPages", [])
             if isinstance(page, int) and page > 0
         }
+
+    ai_continuation = bool(
+        job.get("_ai_continuation")
+        and previous_report.get("suspectPages")
+        and not job.get("_reset_ai_progress")
+    )
+
+    if ai_continuation:
+        # Evita di rieseguire l'estrazione deterministica a ogni passaggio Claude.
+        suspect_indexes = sorted(
+            {
+                int(page) - 1
+                for page in previous_report.get("suspectPages", [])
+                if isinstance(page, int) and page > 0
+            }
+        )
+        suspect_indexes = [
+            index for index in suspect_indexes if 0 <= index < page_count
+        ]
+        page_results = [
+            PageExtraction([], 0.0, 0, adapter.name, ["continuation"])
+            for _ in range(page_count)
+        ]
+        for index in suspect_indexes:
+            page_results[index] = PageExtraction(
+                [],
+                0.0,
+                120,
+                adapter.name,
+                ["unparsed_table", "continuation"],
+            )
+        deterministic_parts = []
+    else:
+        for page_index in range(page_count):
+            result = adapter.extract_page(document[page_index], page_index + 1)
+            page_results.append(result)
+            deterministic_parts.extend(result.parts)
+            if page_index == page_count - 1 or (page_index + 1) % 10 == 0:
+                progress = 10 + int(((page_index + 1) / page_count) * 50)
+                job["progress"] = progress
+                _job_update(
+                    client,
+                    job,
+                    {
+                        "stage": "deterministic_extraction",
+                        "progress": progress,
+                        "processed_items": page_index + 1,
+                        "total_items": page_count,
+                    },
+                )
+
+        suspect_indexes = [
+            index
+            for index, result in enumerate(page_results)
+            if (bool(result.parts) and result.confidence < MIN_PAGE_CONFIDENCE)
+            or "unparsed_table" in result.reasons
+            or "sparse_table" in result.reasons
+            or (
+                result.text_characters < MIN_TEXT_CHARACTERS
+                and _env_int("INDEX_AI_IMAGE_PAGES", 0, 0, 1) == 1
+            )
+        ]
+        # Pages with actual low-confidence rows have priority over image-only pages.
+        suspect_indexes.sort(
+            key=lambda index: (
+                not bool(page_results[index].parts),
+                page_results[index].confidence,
+                index,
+            )
+        )
+
     resolved_before = completed_before - previous_unresolved
     max_ai_pages = _env_int("INDEX_MAX_AI_PAGES", 500, 0, 500)
     eligible_ai_indexes = suspect_indexes[:max_ai_pages]
-    pages_per_run = _env_int("INDEX_AI_PAGES_PER_RUN", 4, 1, 8)
+    pages_per_run = _env_int("INDEX_AI_PAGES_PER_RUN", 16, 1, 32)
     pending_ai_indexes = [
         index for index in eligible_ai_indexes if index not in completed_before
     ]
@@ -1709,8 +1746,8 @@ def _extract(
         )
         selected_ai_indexes = []
 
-    ai_batch_pages = _env_int("INDEX_AI_BATCH_PAGES", 1, 1, 8)
-    ai_concurrency = _env_int("INDEX_AI_CONCURRENCY", 2, 1, 4)
+    ai_batch_pages = _env_int("INDEX_AI_BATCH_PAGES", 2, 1, 4)
+    ai_concurrency = _env_int("INDEX_AI_CONCURRENCY", 4, 1, 6)
     completed_this_run: set[int] = set()
     page_batches = [
         selected_ai_indexes[offset : offset + ai_batch_pages]
@@ -1953,89 +1990,96 @@ def _run_indexing(
     except IndexingError as error:
         exploded_setup_error = error
     try:
-        detected_metadata = _detect_catalog_metadata(document, catalog)
-        if detected_metadata.get("missing"):
-            api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
-            model = (
-                os.environ.get("ANTHROPIC_INDEX_MODEL")
-                or os.environ.get("ANTHROPIC_MODEL")
-                or ""
-            ).strip()
-            if api_key and model:
-                try:
-                    ai_metadata = _anthropic_catalog_metadata(
-                        document,
-                        _catalog_filename(catalog),
-                        api_key,
-                        model,
-                    )
-                    for field in (
-                        "brand",
-                        "model",
-                        "version",
-                        "customer",
-                        "orderReference",
-                        "revision",
-                    ):
-                        if not detected_metadata.get(field) and ai_metadata.get(field):
-                            detected_metadata[field] = _clean_metadata_value(
-                                str(ai_metadata[field]),
-                                160 if field == "customer" else 100,
-                            )
-                    if not detected_metadata.get("serialNumbers"):
-                        detected_metadata["serialNumbers"] = list(
-                            dict.fromkeys(
-                                re.sub(r"[^A-Za-z0-9._/-]", "", str(value)).upper()
-                                for value in ai_metadata.get("serialNumbers", [])
-                                if 3 <= len(str(value)) <= 50
-                            )
-                        )[:500]
-                    detected_metadata["aiConfidence"] = ai_metadata.get("confidence")
-                    detected_metadata["source"] = "deterministic+anthropic"
-                except IndexingError as error:
+        prior_report = job.get("report") if isinstance(job.get("report"), dict) else {}
+        if job.get("_ai_continuation") and isinstance(
+            prior_report.get("detectedMetadata"), dict
+        ):
+            detected_metadata = dict(prior_report["detectedMetadata"])
+        else:
+            detected_metadata = _detect_catalog_metadata(document, catalog)
+            if detected_metadata.get("missing"):
+                api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+                model = (
+                    os.environ.get("ANTHROPIC_INDEX_MODEL")
+                    or os.environ.get("ANTHROPIC_MODEL")
+                    or ""
+                ).strip()
+                if api_key and model:
+                    try:
+                        ai_metadata = _anthropic_catalog_metadata(
+                            document,
+                            _catalog_filename(catalog),
+                            api_key,
+                            model,
+                        )
+                        for field in (
+                            "brand",
+                            "model",
+                            "version",
+                            "customer",
+                            "orderReference",
+                            "revision",
+                        ):
+                            if not detected_metadata.get(field) and ai_metadata.get(field):
+                                detected_metadata[field] = _clean_metadata_value(
+                                    str(ai_metadata[field]),
+                                    160 if field == "customer" else 100,
+                                )
+                        if not detected_metadata.get("serialNumbers"):
+                            detected_metadata["serialNumbers"] = list(
+                                dict.fromkeys(
+                                    re.sub(r"[^A-Za-z0-9._/-]", "", str(value)).upper()
+                                    for value in ai_metadata.get("serialNumbers", [])
+                                    if 3 <= len(str(value)) <= 50
+                                )
+                            )[:500]
+                        detected_metadata["aiConfidence"] = ai_metadata.get("confidence")
+                        detected_metadata["source"] = "deterministic+anthropic"
+                    except IndexingError as error:
+                        detected_metadata["aiError"] = {
+                            "code": error.code,
+                            "message": error.message,
+                        }
+                else:
+                    detected_metadata["source"] = "deterministic"
                     detected_metadata["aiError"] = {
-                        "code": error.code,
-                        "message": error.message,
+                        "code": "ANTHROPIC_NOT_CONFIGURED",
+                        "message": "Fallback metadati AI non configurato.",
                     }
-            else:
-                detected_metadata["source"] = "deterministic"
-                detected_metadata["aiError"] = {
-                    "code": "ANTHROPIC_NOT_CONFIGURED",
-                    "message": "Fallback metadati AI non configurato.",
-                }
-            detected_metadata["missing"] = [
-                key
-                for key in ("brand", "model", "serialNumbers")
-                if not detected_metadata.get(key)
-            ]
-            detected_metadata["confidence"] = round(
-                sum(
-                    bool(detected_metadata.get(key))
-                    for key in (
-                        "brand",
-                        "model",
-                        "version",
-                        "customer",
-                        "orderReference",
-                        "revision",
-                        "serialNumbers",
+                detected_metadata["missing"] = [
+                    key
+                    for key in ("brand", "model", "serialNumbers")
+                    if not detected_metadata.get(key)
+                ]
+                detected_metadata["confidence"] = round(
+                    sum(
+                        bool(detected_metadata.get(key))
+                        for key in (
+                            "brand",
+                            "model",
+                            "version",
+                            "customer",
+                            "orderReference",
+                            "revision",
+                            "serialNumbers",
+                        )
                     )
+                    / 7,
+                    3,
                 )
-                / 7,
-                3,
+            _apply_detected_metadata(client, catalog, detected_metadata)
+        if not job.get("_ai_continuation"):
+            job["progress"] = 8
+            _job_update(
+                client,
+                job,
+                {
+                    "stage": "metadata_detection",
+                    "progress": 8,
+                    "processed_items": 0,
+                    "total_items": document.page_count,
+                },
             )
-        _apply_detected_metadata(client, catalog, detected_metadata)
-        job["progress"] = 8
-        _job_update(
-            client,
-            job,
-            {
-                "stage": "metadata_detection",
-                "progress": 8,
-                "processed_items": 0,
-                "total_items": document.page_count,
-            },
-        )
         parts, report, outcome = _extract(client, job, catalog, document, checksum)
         if job.get("_preserve_ready") and parts:
             outcome = "ready"
@@ -2472,6 +2516,11 @@ class handler(BaseHTTPRequestHandler):
                     and not remaining_prior
                     and not completed_prior
                 )
+            )
+            job["_ai_continuation"] = bool(
+                not job["_reset_ai_progress"]
+                and (remaining_prior or completed_prior)
+                and prior_report.get("suspectPages")
             )
             claimed = True
             response, response_status = _run_indexing(client, job, catalog)

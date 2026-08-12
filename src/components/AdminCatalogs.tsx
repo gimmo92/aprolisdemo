@@ -239,7 +239,6 @@ export function AdminCatalogs() {
       setMessage(
         `Indicizzazione in corso: ${remaining} pagine Claude ancora da elaborare (passaggio ${pass})…`,
       )
-      await new Promise((resolve) => window.setTimeout(resolve, 500))
     }
     throw new Error(
       'Indicizzazione oltre il limite di sicurezza di 500 passaggi. Premi Riprova per continuare.',
