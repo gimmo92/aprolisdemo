@@ -1,6 +1,9 @@
 import { getSupabaseAdmin, isSupabaseConfigured } from './supabase.js'
 import type { IndexedPart, PublicCatalog } from './types.js'
 
+/** Cataloghi visibili in lista ricambi / chat / esplosi. */
+export const LISTABLE_CATALOG_STATUSES = ['ready', 'needs_review'] as const
+
 type CatalogRow = {
   id: string
   brand: string
@@ -82,7 +85,7 @@ export async function findSupabaseCatalog(serial: string) {
     .from('catalog_serials')
     .select('catalog_id, catalogs!inner(*)')
     .eq('normalized_serial', normalized)
-    .eq('catalogs.status', 'ready')
+    .in('catalogs.status', [...LISTABLE_CATALOG_STATUSES])
     .limit(1)
     .maybeSingle()
 
@@ -183,11 +186,12 @@ export async function findSupabaseCatalogByLookup(
     .select(
       'id, brand, model, version, customer, order_reference, storage_path, original_filename, page_count, part_count',
     )
-    .eq('status', 'ready')
+    .in('status', [...LISTABLE_CATALOG_STATUSES])
   if (error) throw error
   if (!catalogs?.length) return undefined
 
   const ranked = (catalogs as CatalogRow[])
+    .filter((catalog) => (catalog.part_count || 0) > 0)
     .map((catalog) => {
       const score = scoreSupabaseCatalog(query, catalog)
       const model = normalizeLookup(catalog.model || '')
@@ -284,12 +288,15 @@ export async function getAllReadySupabaseParts() {
     .select(
       'id, brand, model, version, customer, order_reference, storage_path, original_filename, page_count, part_count',
     )
-    .eq('status', 'ready')
+    .in('status', [...LISTABLE_CATALOG_STATUSES])
     .order('processed_at', { ascending: false })
 
   if (catalogError) throw catalogError
   if (!catalogs?.length) return undefined
-  const catalogRows = catalogs as CatalogRow[]
+  const catalogRows = (catalogs as CatalogRow[]).filter(
+    (catalog) => (catalog.part_count || 0) > 0,
+  )
+  if (!catalogRows.length) return undefined
   const catalogById = new Map(catalogRows.map((catalog) => [catalog.id, catalog]))
   const rows: AllPartRow[] = []
   const pageSize = 1000
@@ -388,7 +395,7 @@ export async function createSignedPdfUrl(catalogId: string, expiresIn = 300) {
     .from('catalogs')
     .select('storage_path')
     .eq('id', catalogId)
-    .eq('status', 'ready')
+    .in('status', [...LISTABLE_CATALOG_STATUSES])
     .single()
 
   if (error || !catalog?.storage_path) return undefined

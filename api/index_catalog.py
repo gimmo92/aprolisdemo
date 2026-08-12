@@ -1914,12 +1914,7 @@ def _extract(
 
     outcome = (
         "ready"
-        if (
-            parts
-            and not unresolved
-            and not ai_errors
-            and not remaining_ai_indexes
-        )
+        if parts and not remaining_ai_indexes
         else "needs_review"
     )
     report = {
@@ -2174,7 +2169,8 @@ def _run_indexing(
     finally:
         document.close()
 
-    if detected_metadata.get("missing"):
+    # Metadati incompleti non nascondono un indice già utile in lista ricambi.
+    if detected_metadata.get("missing") and not parts:
         outcome = "needs_review"
         report["outcome"] = outcome
     report["detectedMetadata"] = detected_metadata

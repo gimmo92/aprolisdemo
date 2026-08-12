@@ -2,6 +2,7 @@ import { gunzipSync } from 'node:zlib'
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { z } from 'zod'
 import { getSupabaseAdmin, isSupabaseConfigured } from './lib/supabase.js'
+import { LISTABLE_CATALOG_STATUSES } from './lib/supabase-retrieval.js'
 
 const viewIdSchema = z.string().uuid()
 
@@ -109,7 +110,7 @@ export default async function handler(
       const { data: catalogs, error: catalogError } = await supabase
         .from('catalogs')
         .select('id, metadata')
-        .eq('status', 'ready')
+        .in('status', [...LISTABLE_CATALOG_STATUSES])
       if (catalogError) throw catalogError
       const readyIds = (catalogs || []).map((catalog) => catalog.id)
       let normalizedRows: ExplodedRow[] = []
@@ -157,7 +158,7 @@ export default async function handler(
       const { data: catalogs, error: catalogError } = await supabase
         .from('catalogs')
         .select('id, metadata')
-        .eq('status', 'ready')
+        .in('status', [...LISTABLE_CATALOG_STATUSES])
       if (catalogError) throw catalogError
       view =
         metadataViews(catalogs || []).find((candidate) => candidate.id === parsed.data) ||
@@ -168,7 +169,7 @@ export default async function handler(
         .from('catalogs')
         .select('status')
         .eq('id', view.catalog_id)
-        .eq('status', 'ready')
+        .in('status', [...LISTABLE_CATALOG_STATUSES])
         .maybeSingle()
       if (!catalog) view = null
     }

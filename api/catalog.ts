@@ -60,21 +60,23 @@ export default async function handler(
       const [{ data: readyCatalogs }, { data: serials }] = await Promise.all([
         supabase
           .from('catalogs')
-          .select('id, original_filename, part_count')
-          .eq('status', 'ready'),
+          .select('id, original_filename, part_count, status')
+          .in('status', ['ready', 'needs_review']),
         supabase.from('catalog_serials').select('serial_number'),
       ])
-      const bundled = getAllBundledParts(
-        (readyCatalogs || []).map((row) => row.original_filename),
+      const listable = (readyCatalogs || []).filter(
+        (catalog) => (catalog.part_count || 0) > 0,
       )
-      const readyParts = (readyCatalogs || []).reduce(
+      const bundled = getAllBundledParts(
+        listable.map((row) => row.original_filename),
+      )
+      const readyParts = listable.reduce(
         (total, catalog) => total + (catalog.part_count || 0),
         0,
       )
       return response.status(200).json({
         stats: {
-          catalogs:
-            (readyCatalogs?.length || 0) + (bundled?.catalogs.length || 0),
+          catalogs: listable.length + (bundled?.catalogs.length || 0),
           parts: readyParts + (bundled?.parts.length || 0),
           serialNumbers: [
             ...new Set([

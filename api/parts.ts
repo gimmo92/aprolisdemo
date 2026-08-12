@@ -73,7 +73,7 @@ export default async function handler(
   request: VercelRequest,
   response: VercelResponse,
 ) {
-  response.setHeader('Cache-Control', 'public, max-age=60, s-maxage=600')
+  response.setHeader('Cache-Control', 'private, no-store')
 
   if (request.method !== 'GET') {
     response.setHeader('Allow', 'GET')
