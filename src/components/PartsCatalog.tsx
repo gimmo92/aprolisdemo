@@ -23,8 +23,15 @@ function normalize(value: string) {
     .toLocaleLowerCase('it')
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
+    // Codici tipo LM2525: "lm52" deve matchare come lm + 52
+    .replace(/([a-z])([0-9])/g, '$1 $2')
+    .replace(/([0-9])([a-z])/g, '$1 $2')
     .replace(/[^a-z0-9]+/g, ' ')
     .trim()
+}
+
+function compact(value: string) {
+  return normalize(value).replace(/\s+/g, '')
 }
 
 type Props = {
@@ -81,10 +88,12 @@ export default function PartsCatalog({ serial }: Props) {
   )
 
   const filteredParts = useMemo(() => {
-    const terms = normalize(query).split(' ').filter(Boolean)
+    const terms = normalize(query).split(/\s+/).filter(Boolean)
+    const queryCompact = compact(query)
     const requestedPage = Number.parseInt(pdfPage, 10)
 
     return parts.filter((part) => {
+      const codeCompact = compact(part.code || '')
       const searchable = normalize(
         [
           part.code,
@@ -98,8 +107,13 @@ export default function PartsCatalog({ serial }: Props) {
           part.page,
         ].join(' '),
       )
+      const matchesQuery =
+        !terms.length ||
+        (Boolean(queryCompact) && codeCompact.includes(queryCompact)) ||
+        terms.every((term) => codeCompact.includes(term) || searchable.includes(term))
+
       return (
-        terms.every((term) => searchable.includes(term)) &&
+        matchesQuery &&
         (!machine || part.catalogName === machine) &&
         (!category || part.category === category) &&
         (!sourceType || part.sourceType === sourceType) &&
