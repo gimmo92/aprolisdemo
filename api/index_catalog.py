@@ -1676,7 +1676,7 @@ def _extract(
     resolved_before = completed_before - previous_unresolved
     max_ai_pages = _env_int("INDEX_MAX_AI_PAGES", 500, 0, 500)
     eligible_ai_indexes = suspect_indexes[:max_ai_pages]
-    pages_per_run = _env_int("INDEX_AI_PAGES_PER_RUN", 1, 1, 8)
+    pages_per_run = _env_int("INDEX_AI_PAGES_PER_RUN", 4, 1, 8)
     pending_ai_indexes = [
         index for index in eligible_ai_indexes if index not in completed_before
     ]
@@ -2430,6 +2430,9 @@ class handler(BaseHTTPRequestHandler):
             prior_report = job.get("report")
             if not isinstance(prior_report, dict):
                 prior_report = {}
+            remaining_prior = prior_report.get("remainingAiPages") or []
+            completed_prior = prior_report.get("completedAiPages") or []
+            force_reset = body.get("resetAi") is True or body.get("reset_ai") is True
             locked = _job_update(
                 client,
                 job,
@@ -2458,10 +2461,17 @@ class handler(BaseHTTPRequestHandler):
                 )
             job.update(locked[0])
             job["_preserve_ready"] = rebuilding_ready
-            # Riprova/rigenera: rielabora tutte le pagine AI (altrimenti restano
-            # bloccate le pagine già "completate" solo con pallini).
-            job["_reset_ai_progress"] = (
-                rebuilding_ready or retrying_review or status == "failed"
+            # Continua i passaggi Claude senza azzerare il progresso.
+            # Reset solo su rigenerazione catalogo pronto, job failed, o richiesta esplicita.
+            job["_reset_ai_progress"] = bool(
+                force_reset
+                or rebuilding_ready
+                or status == "failed"
+                or (
+                    retrying_review
+                    and not remaining_prior
+                    and not completed_prior
+                )
             )
             claimed = True
             response, response_status = _run_indexing(client, job, catalog)

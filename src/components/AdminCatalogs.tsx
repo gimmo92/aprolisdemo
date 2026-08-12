@@ -199,14 +199,22 @@ export function AdminCatalogs() {
     })
   }
 
-  async function runIndexing(catalogId: string, jobId: string) {
+  async function runIndexing(
+    catalogId: string,
+    jobId: string,
+    options?: { resetAi?: boolean },
+  ) {
     let latest: ApiPayload = {}
     let previousRemaining = ''
     let stalledPasses = 0
     for (let pass = 1; pass <= 500; pass += 1) {
       const response = await authenticatedFetch('/api/index_catalog', {
         method: 'POST',
-        body: JSON.stringify({ catalogId, jobId }),
+        body: JSON.stringify({
+          catalogId,
+          jobId,
+          ...(pass === 1 && options?.resetAi ? { resetAi: true } : {}),
+        }),
       })
       latest = await readApiPayload(response)
       if (!response.ok) {
@@ -222,7 +230,7 @@ export function AdminCatalogs() {
       if (!remaining || fatalAi) return latest
       const signature = remainingPages.join(',')
       stalledPasses = signature === previousRemaining ? stalledPasses + 1 : 0
-      if (stalledPasses >= 3) {
+      if (stalledPasses >= 5) {
         throw new Error(
           `Indicizzazione senza avanzamento: restano ${remaining} pagine. Premi Riprova.`,
         )
@@ -309,7 +317,10 @@ export function AdminCatalogs() {
     setBusy(true)
     setMessage(`Nuova indicizzazione di ${catalog.original_filename}…`)
     try {
-      await runIndexing(catalog.id, retryableJob.id)
+      await runIndexing(catalog.id, retryableJob.id, {
+        // Rigenera da zero solo i cataloghi già pronti; in needs_review continua.
+        resetAi: catalog.status === 'ready',
+      })
       setMessage('Indicizzazione completata.')
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Indicizzazione non riuscita.')
