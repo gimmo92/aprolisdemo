@@ -436,13 +436,6 @@ export function AdminCatalogs() {
           const bundled = catalog.source === 'bundled' || catalog.id.startsWith('bundled:')
           const job = catalog.ingestion_jobs?.at(0)
           const stale = !bundled && isStaleJob(job)
-          const summary = bundled
-            ? `Catalogo demo incluso nel deploy${
-                catalog.serial_numbers?.length
-                  ? ` · matricole ${catalog.serial_numbers.join(', ')}`
-                  : ''
-              }`
-            : reportSummary(job)
           const jobError = bundled ? '' : visibleJobError(job?.error_message)
           const state = bundled
             ? 'ready'
@@ -464,9 +457,7 @@ export function AdminCatalogs() {
                 <span>{catalog.original_filename}</span>
                 {jobError ? (
                   <small className="index-error">{jobError}</small>
-                ) : (
-                  summary && <small className="review-summary">{summary}</small>
-                )}
+                ) : null}
                 {job?.report?.explodedError && (
                   <small className="index-error">
                     Esplosi [{job.report.explodedError.code || 'errore'}]:{' '}
