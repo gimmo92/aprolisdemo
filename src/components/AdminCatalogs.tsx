@@ -229,9 +229,7 @@ export function AdminCatalogs() {
       }
       previousRemaining = signature
       setMessage(
-        latest.accepted
-          ? `Indicizzazione in corso: ${latest.accepted} ricambi, ${remaining} pagine Claude ancora da elaborare (passaggio ${pass})…`
-          : `Indicizzazione in corso: ${remaining} pagine Claude ancora da elaborare (passaggio ${pass})…`,
+        `Indicizzazione in corso: ${remaining} pagine Claude ancora da elaborare (passaggio ${pass})…`,
       )
       await new Promise((resolve) => window.setTimeout(resolve, 500))
     }
@@ -275,9 +273,7 @@ export function AdminCatalogs() {
 
       setMessage('Indicizzazione in corso…')
       const indexed = await runIndexing(created.catalogId, created.jobId)
-      setMessage(
-        `Catalogo pronto: ${indexed.accepted || 0} ricambi indicizzati.`,
-      )
+      setMessage('Indicizzazione completata.')
       setFile(undefined)
       setProgress(0)
       await refresh()
@@ -314,9 +310,7 @@ export function AdminCatalogs() {
     setMessage(`Nuova indicizzazione di ${catalog.original_filename}…`)
     try {
       const payload = await runIndexing(catalog.id, retryableJob.id)
-      setMessage(
-        `Catalogo aggiornato: ${payload.accepted || 0} ricambi indicizzati.`,
-      )
+      setMessage('Indicizzazione completata.')
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Indicizzazione non riuscita.')
     } finally {
