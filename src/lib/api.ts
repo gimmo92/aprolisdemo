@@ -106,9 +106,14 @@ export class ApiError extends Error {
   }
 }
 
-async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
+async function apiFetch<T>(
+  path: string,
+  init?: RequestInit,
+  options?: { timeoutMs?: number },
+): Promise<T> {
   const controller = new AbortController()
-  const timeout = window.setTimeout(() => controller.abort(), 30_000)
+  const timeoutMs = options?.timeoutMs ?? 30_000
+  const timeout = window.setTimeout(() => controller.abort(), timeoutMs)
 
   try {
     const response = await fetch(path, {
@@ -174,9 +179,21 @@ export function askPartsAssistant(
   serial: string,
   query: string,
   history: ChatHistoryItem[],
+  image?: { base64: string; mediaType: 'image/jpeg' | 'image/png' | 'image/webp' },
 ) {
-  return apiFetch<ChatResponse>('/api/chat', {
-    method: 'POST',
-    body: JSON.stringify({ serial, query, history }),
-  })
+  return apiFetch<ChatResponse>(
+    '/api/chat',
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        serial,
+        query,
+        history,
+        ...(image
+          ? { imageBase64: image.base64, mediaType: image.mediaType }
+          : {}),
+      }),
+    },
+    { timeoutMs: image ? 55_000 : 30_000 },
+  )
 }

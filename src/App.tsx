@@ -15,8 +15,10 @@ import {
   Search,
   Send,
   ShieldCheck,
+  ImagePlus,
   UploadCloud,
   UserRound,
+  X,
 } from 'lucide-react'
 import { FormEvent, useEffect, useRef, useState } from 'react'
 import { catalog, exampleSearches, type Part } from './data/catalog'
@@ -43,15 +45,22 @@ type Message = {
   sender: 'assistant' | 'user'
   text: string
   eyebrow?: string
+  imageUrl?: string
   results?: Part[]
   noResults?: boolean
+}
+
+type ChatImagePayload = {
+  base64: string
+  mediaType: 'image/jpeg' | 'image/png' | 'image/webp'
+  previewUrl: string
 }
 
 const initialMessage: Message = {
   id: 1,
   sender: 'assistant',
   eyebrow: 'Assistente ricambi',
-  text: 'Buongiorno! Indica la matricola, il modello (es. T135) o il nome del catalogo. Poi cerca il ricambio, anche nella stessa frase.',
+  text: 'Buongiorno! Indica la matricola, il modello (es. T135) o il nome del catalogo. Poi cerca il ricambio, anche nella stessa frase. In ricerca puoi anche caricare una foto del pezzo.',
 }
 
 const LOOKUP_STOPWORDS = new Set([
@@ -115,6 +124,39 @@ function residualSearchQuery(raw: string, matchedLabel: string) {
   return kept.join(' ').trim()
 }
 
+async function prepareChatImage(file: File): Promise<ChatImagePayload> {
+  const allowed = new Set(['image/jpeg', 'image/png', 'image/webp'])
+  if (!allowed.has(file.type)) {
+    throw new Error('Formato non supportato. Usa JPG, PNG o WebP.')
+  }
+  if (file.size > 8 * 1024 * 1024) {
+    throw new Error('Immagine troppo grande (max 8 MB).')
+  }
+
+  const bitmap = await createImageBitmap(file)
+  const maxSide = 1280
+  const scale = Math.min(1, maxSide / Math.max(bitmap.width, bitmap.height))
+  const width = Math.max(1, Math.round(bitmap.width * scale))
+  const height = Math.max(1, Math.round(bitmap.height * scale))
+  const canvas = document.createElement('canvas')
+  canvas.width = width
+  canvas.height = height
+  const context = canvas.getContext('2d')
+  if (!context) throw new Error('Impossibile preparare l’immagine.')
+  context.drawImage(bitmap, 0, 0, width, height)
+  bitmap.close()
+
+  const dataUrl = canvas.toDataURL('image/jpeg', 0.78)
+  const base64 = dataUrl.replace(/^data:image\/jpeg;base64,/, '')
+  if (base64.length > 1_800_000) {
+    throw new Error('Immagine ancora troppo pesante dopo la compressione.')
+  }
+  return {
+    base64,
+    mediaType: 'image/jpeg',
+    previewUrl: dataUrl,
+  }
+}
 
 function PartCard({
   part,
@@ -190,7 +232,16 @@ function ChatMessage({
       </div>
       <div className="message-content">
         {message.eyebrow && <span className="message-eyebrow">{message.eyebrow}</span>}
-        <div className="message-bubble">{message.text}</div>
+        <div className="message-bubble">
+          {message.imageUrl && (
+            <img
+              className="message-image"
+              src={message.imageUrl}
+              alt="Foto ricambio"
+            />
+          )}
+          {message.text}
+        </div>
         {message.noResults && (
           <div className="no-results-hint">
             <CircleHelp size={18} />
@@ -223,6 +274,7 @@ function App() {
   const [activeView, setActiveView] = useState<ActiveView>('chat')
   const [selectedSerial, setSelectedSerial] = useState<string>()
   const [input, setInput] = useState('')
+  const [pendingImage, setPendingImage] = useState<ChatImagePayload>()
   const [messages, setMessages] = useState<Message[]>([initialMessage])
   const [isThinking, setIsThinking] = useState(false)
   const [indexedPartCount, setIndexedPartCount] = useState(585)
@@ -230,11 +282,14 @@ function App() {
     useState<ExplodedSelection>()
   const messageId = useRef(2)
   const scrollArea = useRef<HTMLDivElement>(null)
+  const imageInputRef = useRef<HTMLInputElement>(null)
 
   const placeholder =
     phase === 'serial'
       ? 'Es. 13510073, T135, oppure “sensori T135”'
-      : 'Descrivi il ricambio, es. “fusibile 500A”'
+      : pendingImage
+        ? 'Aggiungi un dettaglio (opzionale) e invia'
+        : 'Descrivi il ricambio o carica una foto'
 
   useEffect(() => {
     getCatalogStats()
@@ -257,8 +312,9 @@ function App() {
   const runPartsSearch = async (
     serial: string,
     value: string,
-    options?: { skipUserMessage?: boolean },
+    options?: { skipUserMessage?: boolean; image?: ChatImagePayload },
   ) => {
+    const image = options?.image
     const history: ChatHistoryItem[] = messages
       .slice(-6)
       .map((message) => ({
@@ -266,16 +322,29 @@ function App() {
         content: message.text,
       }))
     if (!options?.skipUserMessage) {
-      addMessage({ sender: 'user', text: value })
+      addMessage({
+        sender: 'user',
+        text: value || (image ? 'Foto del ricambio' : value),
+        imageUrl: image?.previewUrl,
+      })
     }
     setIsThinking(true)
 
     try {
-      const result = await askPartsAssistant(serial, value, history)
+      const result = await askPartsAssistant(
+        serial,
+        value || 'Identifica il ricambio nella foto',
+        history,
+        image
+          ? { base64: image.base64, mediaType: image.mediaType }
+          : undefined,
+      )
       if (result.parts.length) {
         addMessage({
           sender: 'assistant',
-          eyebrow: 'Risposta Claude · fonti verificate',
+          eyebrow: image
+            ? 'Riconoscimento foto · fonti verificate'
+            : 'Risposta Claude · fonti verificate',
           text: result.answer,
           results: result.parts,
         })
@@ -354,18 +423,46 @@ function App() {
     }
   }
 
-  const handleSearch = async (value: string) => {
+  const handleSearch = async (value: string, image?: ChatImagePayload) => {
     if (!selectedSerial) return
-    await runPartsSearch(selectedSerial, value)
+    await runPartsSearch(selectedSerial, value, { image })
+  }
+
+  const onPickImage = async (file?: File | null) => {
+    if (!file || isThinking || phase !== 'search') return
+    try {
+      const prepared = await prepareChatImage(file)
+      setPendingImage(prepared)
+    } catch (error) {
+      addMessage({
+        sender: 'assistant',
+        eyebrow: 'Immagine non valida',
+        text:
+          error instanceof Error
+            ? error.message
+            : 'Non riesco a usare questa immagine.',
+        noResults: true,
+      })
+    } finally {
+      if (imageInputRef.current) imageInputRef.current.value = ''
+    }
   }
 
   const submit = (event: FormEvent) => {
     event.preventDefault()
     const value = input.trim()
-    if (!value || isThinking) return
+    if (isThinking) return
+    if (phase === 'serial') {
+      if (!value) return
+      setInput('')
+      void handleSerial(value)
+      return
+    }
+    if (!value && !pendingImage) return
+    const image = pendingImage
     setInput('')
-    if (phase === 'serial') void handleSerial(value)
-    else void handleSearch(value)
+    setPendingImage(undefined)
+    void handleSearch(value, image)
   }
 
   const reset = () => {
@@ -373,6 +470,7 @@ function App() {
     setPhase('serial')
     setSelectedSerial(undefined)
     setInput('')
+    setPendingImage(undefined)
     setIsThinking(false)
     setExplodedSelection(undefined)
     messageId.current = 2
@@ -531,10 +629,58 @@ function App() {
                     placeholder={placeholder}
                     aria-label={placeholder}
                   />
-                  <button type="submit" disabled={!input.trim() || isThinking} aria-label="Invia">
-                    {isThinking ? <LoaderCircle className="spin" size={19} /> : <Send size={19} />}
+                  {phase === 'search' && (
+                    <>
+                      <input
+                        ref={imageInputRef}
+                        type="file"
+                        accept="image/jpeg,image/png,image/webp"
+                        hidden
+                        onChange={(event) =>
+                          void onPickImage(event.target.files?.[0])
+                        }
+                      />
+                      <button
+                        type="button"
+                        className="composer-attach"
+                        disabled={isThinking}
+                        aria-label="Carica foto ricambio"
+                        title="Carica foto ricambio"
+                        onClick={() => imageInputRef.current?.click()}
+                      >
+                        <ImagePlus size={18} />
+                      </button>
+                    </>
+                  )}
+                  <button
+                    type="submit"
+                    disabled={
+                      isThinking ||
+                      (phase === 'serial'
+                        ? !input.trim()
+                        : !input.trim() && !pendingImage)
+                    }
+                    aria-label="Invia"
+                  >
+                    {isThinking ? (
+                      <LoaderCircle className="spin" size={19} />
+                    ) : (
+                      <Send size={19} />
+                    )}
                   </button>
                 </form>
+                {pendingImage && phase === 'search' && (
+                  <div className="composer-image-preview">
+                    <img src={pendingImage.previewUrl} alt="Anteprima foto" />
+                    <button
+                      type="button"
+                      aria-label="Rimuovi foto"
+                      onClick={() => setPendingImage(undefined)}
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+                )}
                 <p className="composer-note">
                   <ShieldCheck size={13} /> Risposte basate esclusivamente sul catalogo associato
                   <ArrowRight size={13} />

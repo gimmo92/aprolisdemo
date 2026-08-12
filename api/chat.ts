@@ -10,20 +10,40 @@ import {
 import { isSupabaseConfigured } from './lib/supabase.js'
 import type { IndexedPart } from './lib/types.js'
 
-const requestSchema = z.object({
-  serial: z.string().trim().min(4).max(32),
-  query: z.string().trim().min(2).max(500),
-  history: z
-    .array(
-      z.object({
-        role: z.enum(['user', 'assistant']),
-        content: z.string().trim().min(1).max(800),
-      }),
-    )
-    .max(6)
-    .optional()
-    .default([]),
-})
+const requestSchema = z
+  .object({
+    serial: z.string().trim().min(4).max(32),
+    query: z.string().trim().max(500).default(''),
+    imageBase64: z.string().min(80).max(2_500_000).optional(),
+    mediaType: z.enum(['image/jpeg', 'image/png', 'image/webp']).optional(),
+    history: z
+      .array(
+        z.object({
+          role: z.enum(['user', 'assistant']),
+          content: z.string().trim().min(1).max(800),
+        }),
+      )
+      .max(6)
+      .optional()
+      .default([]),
+  })
+  .superRefine((value, ctx) => {
+    const hasImage = Boolean(value.imageBase64 && value.mediaType)
+    if (!hasImage && value.query.trim().length < 2) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Serve una query o un’immagine.',
+        path: ['query'],
+      })
+    }
+    if (value.imageBase64 && !value.mediaType) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'mediaType richiesto con imageBase64.',
+        path: ['mediaType'],
+      })
+    }
+  })
 
 const toolInputSchema = z.object({
   query: z.string().trim().min(1).max(300),
@@ -60,7 +80,10 @@ Devi usare search_parts prima di proporre qualsiasi ricambio.
 Puoi citare solo codici, quantità, riferimenti e pagine presenti nei risultati del tool.
 Non inventare mai un codice o una compatibilità.
 Se i risultati non sono sufficienti, dichiaralo e chiedi un dettaglio tecnico mirato.
-La quantità è quella richiesta dalla tavola per quella specifica posizione, non la disponibilità a magazzino.`
+La quantità è quella richiesta dalla tavola per quella specifica posizione, non la disponibilità a magazzino.
+Se l'utente invia una foto del pezzo: osserva forma, materiali, fori, connettori e marche visibili;
+deduci il tipo di componente e cerca con search_parts usando termini tecnici mirati (anche in inglese/francese).
+Non affermare il codice solo dalla foto: proponi solo ricambi trovati dal tool.`
 
 function textFromResponse(message: Anthropic.Messages.Message) {
   return message.content
@@ -163,7 +186,7 @@ export default async function handler(
     })
   }
 
-  const { serial, query, history } = parsed.data
+  const { serial, query, history, imageBase64, mediaType } = parsed.data
   const localCatalog = findCatalog(serial)
   const remoteCatalog = isSupabaseConfigured()
     ? await findSupabaseCatalog(serial)
@@ -181,13 +204,36 @@ export default async function handler(
     })
   }
 
+  const hasImage = Boolean(imageBase64 && mediaType)
   const client = new Anthropic({
     apiKey: process.env.ANTHROPIC_API_KEY,
     maxRetries: 1,
-    timeout: 25_000,
+    timeout: hasImage ? 50_000 : 25_000,
   })
 
   const model = process.env.ANTHROPIC_MODEL || 'claude-sonnet-5'
+  const requestText =
+    `Matricola verificata: ${serial}. Modello: ${catalog.version}. ` +
+    (hasImage
+      ? `L'utente ha inviato una foto del ricambio${
+          query.trim() ? ` con nota: ${query.trim()}` : ''
+        }. Identifica il pezzo e cerca i candidati più probabili nel catalogo.`
+      : `Richiesta ricambio: ${query}`)
+
+  const userContent: Anthropic.Messages.ContentBlockParam[] = hasImage
+    ? [
+        {
+          type: 'image',
+          source: {
+            type: 'base64',
+            media_type: mediaType!,
+            data: imageBase64!.replace(/^data:[^;]+;base64,/, ''),
+          },
+        },
+        { type: 'text', text: requestText },
+      ]
+    : [{ type: 'text', text: requestText }]
+
   const messages: Anthropic.Messages.MessageParam[] = [
     ...history.map(
       (item): Anthropic.Messages.MessageParam => ({
@@ -197,9 +243,7 @@ export default async function handler(
     ),
     {
       role: 'user',
-      content:
-        `Matricola verificata: ${serial}. Modello: ${catalog.version}. ` +
-        `Richiesta ricambio: ${query}`,
+      content: userContent,
     },
   ]
 

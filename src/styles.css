@@ -769,6 +769,16 @@ a.pdf-reference:hover {
   line-height: 1.62;
 }
 
+.message-image {
+  display: block;
+  width: min(100%, 220px);
+  max-height: 180px;
+  object-fit: cover;
+  border-radius: 10px;
+  margin: 0 0 10px;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+}
+
 .message-row.user .message-bubble {
   color: white;
   background: linear-gradient(135deg, var(--blue-700), #075aab);
@@ -1065,6 +1075,60 @@ a.pdf-reference:hover {
 .composer > svg {
   color: #8698aa;
   flex: 0 0 auto;
+}
+
+.composer-attach {
+  width: 38px;
+  height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #5f758c;
+  background: #f4f8fc;
+  border: 1px solid #d7e2ec;
+  border-radius: 10px;
+  flex: 0 0 auto;
+}
+
+.composer-attach:hover:not(:disabled) {
+  color: var(--blue-800);
+  border-color: #bcd3e9;
+  background: var(--blue-50);
+}
+
+.composer-attach:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.composer-image-preview {
+  position: relative;
+  width: fit-content;
+  margin: 10px 2px 0;
+}
+
+.composer-image-preview img {
+  display: block;
+  width: 88px;
+  height: 88px;
+  object-fit: cover;
+  border-radius: 12px;
+  border: 1px solid #d5e0ea;
+}
+
+.composer-image-preview button {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  background: #35506a;
+  border: 0;
+  border-radius: 999px;
 }
 
 .composer input {
