@@ -1659,16 +1659,20 @@ def _extract(
     previous_report = job.get("report")
     if not isinstance(previous_report, dict):
         previous_report = {}
-    completed_before = {
-        int(page) - 1
-        for page in previous_report.get("completedAiPages", [])
-        if isinstance(page, int) and page > 0
-    }
-    previous_unresolved = {
-        int(page) - 1
-        for page in previous_report.get("unresolvedPages", [])
-        if isinstance(page, int) and page > 0
-    }
+    if job.get("_reset_ai_progress"):
+        completed_before: set[int] = set()
+        previous_unresolved: set[int] = set()
+    else:
+        completed_before = {
+            int(page) - 1
+            for page in previous_report.get("completedAiPages", [])
+            if isinstance(page, int) and page > 0
+        }
+        previous_unresolved = {
+            int(page) - 1
+            for page in previous_report.get("unresolvedPages", [])
+            if isinstance(page, int) and page > 0
+        }
     resolved_before = completed_before - previous_unresolved
     max_ai_pages = _env_int("INDEX_MAX_AI_PAGES", 500, 0, 500)
     eligible_ai_indexes = suspect_indexes[:max_ai_pages]
@@ -1745,16 +1749,25 @@ def _extract(
                 try:
                     extracted = future.result()
                     ai_parts.extend(extracted)
-                    completed_this_run.update(batch)
                     pages_with_parts = {part.page - 1 for part in extracted}
                     for page_index in batch:
-                        # Empty is valid for a non-table page, but cannot
-                        # resolve an already sparse/partial table.
-                        if (
-                            page_index in pages_with_parts
-                            or not page_results[page_index].parts
-                        ):
+                        reasons = set(page_results[page_index].reasons)
+                        table_like = bool(
+                            page_results[page_index].parts
+                            or "unparsed_table" in reasons
+                            or "sparse_table" in reasons
+                        )
+                        if page_index in pages_with_parts:
                             unresolved.discard(page_index)
+                            completed_this_run.add(page_index)
+                        elif not table_like:
+                            # Disegno/esploso senza tabella ricambi.
+                            unresolved.discard(page_index)
+                            completed_this_run.add(page_index)
+                        else:
+                            # Tabella sospetta ma nessun codice valido (es. solo
+                            # pallini): conta come tentata, resta da verificare.
+                            completed_this_run.add(page_index)
                 except IndexingError as error:
                     for page_index in batch:
                         ai_errors.append(
@@ -1802,9 +1815,9 @@ def _extract(
         if not is_callout_code(part.code)
     ]
     parts = _merge_parts([*existing_parts, *deterministic_parts], ai_parts)
+    # Mai salvare pallini esploso come ricambi.
+    parts = [part for part in parts if not is_callout_code(part.code)]
     if not parts:
-        # Ancora nessuna riga utile, ma restano pagine AI da processare:
-        # non fallire — il client ripete il passaggio successivo.
         if remaining_ai_indexes and not (
             ai_errors and ai_errors[0].get("code") == "ANTHROPIC_NOT_CONFIGURED"
         ):
@@ -1864,7 +1877,12 @@ def _extract(
 
     outcome = (
         "ready"
-        if not unresolved and not ai_errors and not remaining_ai_indexes
+        if (
+            parts
+            and not unresolved
+            and not ai_errors
+            and not remaining_ai_indexes
+        )
         else "needs_review"
     )
     report = {
@@ -2440,6 +2458,11 @@ class handler(BaseHTTPRequestHandler):
                 )
             job.update(locked[0])
             job["_preserve_ready"] = rebuilding_ready
+            # Riprova/rigenera: rielabora tutte le pagine AI (altrimenti restano
+            # bloccate le pagine già "completate" solo con pallini).
+            job["_reset_ai_progress"] = (
+                rebuilding_ready or retrying_review or status == "failed"
+            )
             claimed = True
             response, response_status = _run_indexing(client, job, catalog)
             response["elapsedSeconds"] = round(time.monotonic() - started, 3)

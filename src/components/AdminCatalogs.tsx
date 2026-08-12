@@ -85,7 +85,10 @@ type ApiPayload = {
   approved?: boolean
 }
 
-function statusLabel(status: string) {
+function statusLabel(status: string, partCount?: number) {
+  if (status === 'ready' && typeof partCount === 'number' && partCount < 1) {
+    return 'Senza ricambi'
+  }
   const labels: Record<string, string> = {
     uploaded: 'Caricato',
     queued: 'In coda',
@@ -424,8 +427,10 @@ export function AdminCatalogs() {
               </div>
               <div className="admin-catalog-meta">
                 <span className="status-badge">
-                  {state === 'ready' && <CheckCircle2 size={14} />}
-                  {statusLabel(state)}{' '}
+                  {state === 'ready' && (catalog.part_count || 0) > 0 && (
+                    <CheckCircle2 size={14} />
+                  )}
+                  {statusLabel(state, catalog.part_count)}{' '}
                   {bundled ? '' : job?.progress ? `${job.progress}%` : ''}
                 </span>
                 <div className="admin-row-actions">
