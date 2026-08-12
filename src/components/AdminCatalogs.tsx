@@ -421,7 +421,6 @@ export function AdminCatalogs() {
                   {statusLabel(state)}{' '}
                   {bundled ? '' : job?.progress ? `${job.progress}%` : ''}
                 </span>
-                <span>{catalog.part_count || 0} ricambi</span>
                 <div className="admin-row-actions">
                   {!bundled &&
                     (state === 'ready' ||
