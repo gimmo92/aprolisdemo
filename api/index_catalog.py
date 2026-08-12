@@ -1326,6 +1326,18 @@ def _anthropic_parts_batch(
             )
         )
     if rows and not parts:
+        # Pagine esploso: Claude restituisce i pallini come "code". Non è un
+        # fallimento del modello — la pagina semplicemente non ha ricambi utili.
+        soft_reasons = {
+            "invalid_code",
+            "empty_description",
+            "invalid_quantity",
+        }
+        if rejection_samples and all(
+            isinstance(sample, dict) and sample.get("reason") in soft_reasons
+            for sample in rejection_samples
+        ):
+            return []
         raise IndexingError(
             502,
             "ANTHROPIC_INVALID_JSON",
@@ -1784,9 +1796,58 @@ def _extract(
         for index in eligible_ai_indexes
         if index not in completed_cumulative
     ]
-    existing_parts = _existing_catalog_parts(client, str(catalog["id"]))
+    existing_parts = [
+        part
+        for part in _existing_catalog_parts(client, str(catalog["id"]))
+        if not is_callout_code(part.code)
+    ]
     parts = _merge_parts([*existing_parts, *deterministic_parts], ai_parts)
     if not parts:
+        # Ancora nessuna riga utile, ma restano pagine AI da processare:
+        # non fallire — il client ripete il passaggio successivo.
+        if remaining_ai_indexes and not (
+            ai_errors and ai_errors[0].get("code") == "ANTHROPIC_NOT_CONFIGURED"
+        ):
+            report = {
+                "outcome": "needs_review",
+                "adapter": adapter.name,
+                "checksumSha256": checksum,
+                "pages": page_count,
+                "parts": 0,
+                "deterministicParts": len(deterministic_parts),
+                "aiParts": len(ai_parts),
+                "aiPages": [index + 1 for index in sorted(completed_cumulative)],
+                "aiPagesThisRun": [
+                    index + 1 for index in sorted(completed_this_run)
+                ],
+                "completedAiPages": [
+                    index + 1 for index in sorted(completed_cumulative)
+                ],
+                "remainingAiPages": [
+                    index + 1 for index in remaining_ai_indexes
+                ],
+                "suspectPages": [index + 1 for index in suspect_indexes],
+                "unresolvedPages": [
+                    index + 1 for index in sorted(unresolved)
+                ],
+                "aiErrors": ai_errors,
+                "limits": {
+                    "maxAiPages": max_ai_pages,
+                    "pagesPerRun": pages_per_run,
+                    "maxPdfBytes": _env_int(
+                        "INDEX_MAX_PDF_BYTES",
+                        DEFAULT_MAX_PDF_BYTES,
+                        1,
+                        250 * 1024 * 1024,
+                    ),
+                    "batchSize": _env_int(
+                        "INDEX_PART_BATCH_SIZE", DEFAULT_BATCH_SIZE, 1, 1000
+                    ),
+                    "aiConcurrency": ai_concurrency,
+                    "aiBatchPages": ai_batch_pages,
+                },
+            }
+            return [], report, "needs_review"
         if ai_errors and ai_errors[0].get("code") == "ANTHROPIC_NOT_CONFIGURED":
             raise IndexingError(
                 503,
@@ -1961,6 +2022,45 @@ def _run_indexing(
         if job.get("_preserve_ready") and parts:
             outcome = "ready"
             report["outcome"] = "ready"
+        # Nessun ricambio ancora, ma altre pagine AI in coda: salva progresso
+        # senza svuotare l'indice e lascia che il client ripeta.
+        if not parts and report.get("remainingAiPages"):
+            report["detectedMetadata"] = detected_metadata
+            report["completedAt"] = _utc_now()
+            _catalog_update(
+                client,
+                catalog,
+                {
+                    "status": "needs_review",
+                    "checksum_sha256": checksum,
+                    "page_count": document.page_count,
+                    "processed_at": _utc_now(),
+                    "report": report,
+                },
+            )
+            _job_update(
+                client,
+                job,
+                {
+                    "status": "completed",
+                    "stage": "needs_review",
+                    "progress": 100,
+                    "error_message": None,
+                    "report": report,
+                    "completed_at": _utc_now(),
+                },
+            )
+            return {
+                "ok": True,
+                "jobId": job["id"],
+                "catalogId": catalog["id"],
+                "status": "needs_review",
+                "parts": 0,
+                "accepted": 0,
+                "pages": document.page_count,
+                "metadata": detected_metadata,
+                "report": report,
+            }, 200
         if not report.get("remainingAiPages") or report.get("aiErrors"):
             _job_update(
                 client,

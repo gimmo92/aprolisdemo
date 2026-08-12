@@ -211,7 +211,12 @@ export function AdminCatalogs() {
       }
       const remainingPages = latest.report?.remainingAiPages || []
       const remaining = remainingPages.length
-      if (!remaining || latest.report?.aiErrors?.length) return latest
+      const fatalAi = (latest.report?.aiErrors || []).some(
+        (error) =>
+          error?.code === 'ANTHROPIC_NOT_CONFIGURED' ||
+          error?.code === 'ANTHROPIC_INTERNAL_ERROR',
+      )
+      if (!remaining || fatalAi) return latest
       const signature = remainingPages.join(',')
       stalledPasses = signature === previousRemaining ? stalledPasses + 1 : 0
       if (stalledPasses >= 3) {
@@ -221,7 +226,9 @@ export function AdminCatalogs() {
       }
       previousRemaining = signature
       setMessage(
-        `Indicizzazione in corso: ${remaining} pagine Claude ancora da elaborare (passaggio ${pass})…`,
+        latest.accepted
+          ? `Indicizzazione in corso: ${latest.accepted} ricambi, ${remaining} pagine Claude ancora da elaborare (passaggio ${pass})…`
+          : `Indicizzazione in corso: ${remaining} pagine Claude ancora da elaborare (passaggio ${pass})…`,
       )
       await new Promise((resolve) => window.setTimeout(resolve, 500))
     }
