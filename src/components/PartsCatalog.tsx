@@ -34,6 +34,25 @@ function compact(value: string) {
   return normalize(value).replace(/\s+/g, '')
 }
 
+function positionSortKey(value: string | number | undefined) {
+  const text = String(value ?? '').trim()
+  if (!text) return { empty: 1, nums: [] as number[], text: '' }
+  const nums = text.match(/\d+/g)?.map((part) => Number.parseInt(part, 10)) || []
+  return { empty: 0, nums, text: text.toLocaleLowerCase('it') }
+}
+
+function comparePosition(left: string | number | undefined, right: string | number | undefined) {
+  const a = positionSortKey(left)
+  const b = positionSortKey(right)
+  if (a.empty !== b.empty) return a.empty - b.empty
+  const length = Math.max(a.nums.length, b.nums.length)
+  for (let index = 0; index < length; index += 1) {
+    const delta = (a.nums[index] ?? 0) - (b.nums[index] ?? 0)
+    if (delta) return delta
+  }
+  return a.text.localeCompare(b.text, 'it', { numeric: true })
+}
+
 type Props = {
   serial?: string
 }
@@ -92,34 +111,41 @@ export default function PartsCatalog({ serial }: Props) {
     const queryCompact = compact(query)
     const requestedPage = Number.parseInt(pdfPage, 10)
 
-    return parts.filter((part) => {
-      const codeCompact = compact(part.code || '')
-      const searchable = normalize(
-        [
-          part.code,
-          part.description,
-          part.originalDescription,
-          part.item,
-          part.category,
-          part.catalogName,
-          part.assemblyCode,
-          part.assemblyTitle,
-          part.page,
-        ].join(' '),
-      )
-      const matchesQuery =
-        !terms.length ||
-        (Boolean(queryCompact) && codeCompact.includes(queryCompact)) ||
-        terms.every((term) => codeCompact.includes(term) || searchable.includes(term))
+    return parts
+      .filter((part) => {
+        const codeCompact = compact(part.code || '')
+        const searchable = normalize(
+          [
+            part.code,
+            part.description,
+            part.originalDescription,
+            part.item,
+            part.category,
+            part.catalogName,
+            part.assemblyCode,
+            part.assemblyTitle,
+            part.page,
+          ].join(' '),
+        )
+        const matchesQuery =
+          !terms.length ||
+          (Boolean(queryCompact) && codeCompact.includes(queryCompact)) ||
+          terms.every((term) => codeCompact.includes(term) || searchable.includes(term))
 
-      return (
-        matchesQuery &&
-        (!machine || part.catalogName === machine) &&
-        (!category || part.category === category) &&
-        (!sourceType || part.sourceType === sourceType) &&
-        (!pdfPage || part.page === requestedPage)
-      )
-    })
+        return (
+          matchesQuery &&
+          (!machine || part.catalogName === machine) &&
+          (!category || part.category === category) &&
+          (!sourceType || part.sourceType === sourceType) &&
+          (!pdfPage || part.page === requestedPage)
+        )
+      })
+      .sort((left, right) => {
+        const byPosition = comparePosition(left.item, right.item)
+        if (byPosition) return byPosition
+        if (left.page !== right.page) return left.page - right.page
+        return left.code.localeCompare(right.code, 'it', { numeric: true })
+      })
   }, [category, machine, parts, pdfPage, query, sourceType])
 
   useEffect(() => {
