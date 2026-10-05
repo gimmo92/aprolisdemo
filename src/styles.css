@@ -1544,9 +1544,72 @@ a.pdf-reference:hover {
   border-radius: 13px;
 }
 
-.file-drop:hover {
+.file-drop:hover,
+.file-drop.drag-over {
   background: #edf3ff;
   border-color: #2563eb;
+}
+
+.upload-queue {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 16px;
+  padding: 0;
+  list-style: none;
+}
+
+.upload-queue-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 9px;
+  font-size: 13px;
+}
+
+.upload-queue-item strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.queue-status {
+  color: #64748b;
+  font-size: 12px;
+  text-align: right;
+}
+
+.queue-status.done {
+  color: #15803d;
+}
+
+.queue-status.indexing,
+.queue-status.uploading {
+  color: #1d4ed8;
+}
+
+.queue-status.error {
+  max-width: 280px;
+  color: #b91c1c;
+  white-space: normal;
+}
+
+.upload-queue-item button {
+  display: inline-flex;
+  padding: 4px;
+  color: #64748b;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.upload-queue-item button:disabled {
+  opacity: .4;
+  cursor: not-allowed;
 }
 
 .file-drop input {
@@ -1639,6 +1702,11 @@ a.pdf-reference:hover {
 .list-heading button {
   color: #1e40af;
   background: #edf3ff;
+}
+
+.list-heading button:disabled {
+  cursor: not-allowed;
+  opacity: .55;
 }
 
 .upload-progress {

@@ -8,6 +8,7 @@ import {
   LoaderCircle,
   RefreshCw,
   Trash2,
+  X,
 } from 'lucide-react'
 import {
   authenticatedFetch,
@@ -110,6 +111,44 @@ function isStaleJob(
   return Number.isFinite(updatedAt) && Date.now() - updatedAt >= 6 * 60 * 1000
 }
 
+const MAX_PDF_BYTES = 250 * 1024 * 1024
+
+type QueueStatus = 'pending' | 'uploading' | 'indexing' | 'done' | 'error'
+
+type QueueItem = {
+  id: string
+  file: File
+  status: QueueStatus
+  progress: number
+  error?: string
+}
+
+function pdfProblem(file: File) {
+  const namedPdf = /\.pdf$/i.test(file.name)
+  if (file.type === 'application/pdf' || (file.type === '' && namedPdf)) {
+    if (file.size === 0) return 'il file è vuoto'
+    if (file.size > MAX_PDF_BYTES) return 'supera 250 MB'
+    return null
+  }
+  return 'non è un PDF'
+}
+
+function sameFile(left: File, right: File) {
+  return (
+    left.name === right.name &&
+    left.size === right.size &&
+    left.lastModified === right.lastModified
+  )
+}
+
+function queueStatusLabel(item: QueueItem) {
+  if (item.status === 'pending') return 'In attesa'
+  if (item.status === 'uploading') return `Caricamento ${item.progress}%`
+  if (item.status === 'indexing') return 'Indicizzazione'
+  if (item.status === 'done') return 'Completato'
+  return item.error || 'Errore'
+}
+
 async function readApiPayload(response: Response): Promise<ApiPayload> {
   const text = await response.text()
   try {
@@ -127,15 +166,15 @@ export function AdminCatalogs() {
   const { session } = useAuth()
   const [role, setRole] = useState<string>()
   const [loading, setLoading] = useState(true)
-  const [file, setFile] = useState<File>()
-  const [progress, setProgress] = useState(0)
+  const [queue, setQueue] = useState<QueueItem[]>([])
+  const [dragOver, setDragOver] = useState(false)
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
   const [catalogs, setCatalogs] = useState<AdminCatalog[]>([])
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (silent = false) => {
     if (!supabase || !session) return
-    setLoading(true)
+    if (!silent) setLoading(true)
     try {
       const active = await getValidSession()
       const { data } = await supabase
@@ -149,11 +188,13 @@ export function AdminCatalogs() {
       const payload = await readApiPayload(response)
       if (response.ok) setCatalogs(payload.catalogs || [])
     } catch (error) {
-      setMessage(
-        error instanceof Error ? error.message : 'Sessione non disponibile.',
-      )
+      if (!silent) {
+        setMessage(
+          error instanceof Error ? error.message : 'Sessione non disponibile.',
+        )
+      }
     } finally {
-      setLoading(false)
+      if (!silent) setLoading(false)
     }
   }, [session])
 
@@ -161,7 +202,52 @@ export function AdminCatalogs() {
     void refresh()
   }, [refresh])
 
-  function uploadTus(selectedFile: File, objectName: string) {
+  function patchQueue(id: string, patch: Partial<QueueItem>) {
+    setQueue((current) =>
+      current.map((item) => (item.id === id ? { ...item, ...patch } : item)),
+    )
+  }
+
+  function addFiles(list: FileList | File[]) {
+    const incoming = Array.from(list)
+    const rejected: string[] = []
+    const accepted: QueueItem[] = []
+    for (const file of incoming) {
+      const problem = pdfProblem(file)
+      if (problem) {
+        rejected.push(`${file.name}: ${problem}.`)
+        continue
+      }
+      accepted.push({
+        id: crypto.randomUUID(),
+        file,
+        status: 'pending',
+        progress: 0,
+      })
+    }
+    setQueue((current) => {
+      const next = [...current]
+      for (const item of accepted) {
+        if (
+          next.some(
+            (existing) =>
+              existing.status !== 'done' && sameFile(existing.file, item.file),
+          )
+        ) {
+          continue
+        }
+        next.push(item)
+      }
+      return next
+    })
+    if (rejected.length) setMessage(rejected.slice(0, 4).join(' '))
+  }
+
+  function uploadTus(
+    selectedFile: File,
+    objectName: string,
+    onProgress: (percent: number) => void,
+  ) {
     return new Promise<void>((resolve, reject) => {
       if (!supabaseUrl || !supabasePublishableKey) {
         reject(new Error('Supabase non configurato.'))
@@ -189,7 +275,7 @@ export function AdminCatalogs() {
         },
         onError: reject,
         onProgress: (uploaded, total) =>
-          setProgress(Math.round((uploaded / total) * 100)),
+          onProgress(total > 0 ? Math.round((uploaded / total) * 100) : 0),
         onSuccess: () => resolve(),
       })
       upload.findPreviousUploads().then((previous) => {
@@ -202,7 +288,7 @@ export function AdminCatalogs() {
   async function runIndexing(
     catalogId: string,
     jobId: string,
-    options?: { resetAi?: boolean },
+    options?: { resetAi?: boolean; label?: string },
   ) {
     let latest: ApiPayload = {}
     let previousRemaining = ''
@@ -237,7 +323,9 @@ export function AdminCatalogs() {
       }
       previousRemaining = signature
       setMessage(
-        `Indicizzazione in corso: ${remaining} pagine Claude ancora da elaborare (passaggio ${pass})…`,
+        options?.label
+          ? `${options.label}: ${remaining} pagine Claude ancora da elaborare (passaggio ${pass})…`
+          : `Indicizzazione in corso: ${remaining} pagine Claude ancora da elaborare (passaggio ${pass})…`,
       )
     }
     throw new Error(
@@ -247,45 +335,75 @@ export function AdminCatalogs() {
 
   async function submitCatalog(event: React.FormEvent) {
     event.preventDefault()
-    if (!file || !session) return
-    if (file.type !== 'application/pdf' || file.size === 0) {
-      setMessage('Seleziona un PDF valido e non vuoto.')
-      return
-    }
-    if (file.size > 250 * 1024 * 1024) {
-      setMessage('Il PDF supera il limite di 250 MB.')
-      return
-    }
+    if (!session) return
+    const batch = queue.filter(
+      (item) => item.status === 'pending' || item.status === 'error',
+    )
+    if (!batch.length) return
     setBusy(true)
-    setMessage('Caricamento PDF in corso…')
-    setProgress(0)
-    const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_')
+    let completed = 0
+    let failed = 0
+    const finished = new Set<string>()
     try {
-      const active = await getValidSession()
-      const storagePath = `${active.user.id}/${crypto.randomUUID()}-${safeName}`
-      await uploadTus(file, storagePath)
-      setMessage('Registrazione catalogo…')
-      const createResponse = await authenticatedFetch('/api/admin/catalogs', {
-        method: 'POST',
-        body: JSON.stringify({
-          storagePath,
-          originalFilename: file.name,
-          fileSize: file.size,
-        }),
-      })
-      const created = await readApiPayload(createResponse)
-      if (!createResponse.ok || !created.catalogId || !created.jobId) {
-        throw new Error(created.error || 'Catalogo non registrato.')
+      for (const [index, item] of batch.entries()) {
+        const position = `${index + 1}/${batch.length}`
+        try {
+          patchQueue(item.id, {
+            status: 'uploading',
+            progress: 0,
+            error: undefined,
+          })
+          setMessage(`Caricamento ${position}: ${item.file.name}`)
+          const active = await getValidSession()
+          const safeName = item.file.name.replace(/[^a-zA-Z0-9._-]/g, '_')
+          const storagePath = `${active.user.id}/${crypto.randomUUID()}-${safeName}`
+          await uploadTus(item.file, storagePath, (percent) => {
+            patchQueue(item.id, { progress: percent })
+          })
+          setMessage(`Registrazione ${position}: ${item.file.name}`)
+          const createResponse = await authenticatedFetch('/api/admin/catalogs', {
+            method: 'POST',
+            body: JSON.stringify({
+              storagePath,
+              originalFilename: item.file.name,
+              fileSize: item.file.size,
+            }),
+          })
+          const created = await readApiPayload(createResponse)
+          if (!createResponse.ok || !created.catalogId || !created.jobId) {
+            throw new Error(created.error || 'Catalogo non registrato.')
+          }
+          patchQueue(item.id, { status: 'indexing', progress: 100 })
+          setMessage(`Indicizzazione ${position}: ${item.file.name}`)
+          await runIndexing(created.catalogId, created.jobId, {
+            label: `${item.file.name} (${position})`,
+          })
+          patchQueue(item.id, { status: 'done' })
+          finished.add(item.id)
+          completed += 1
+          await refresh(true)
+        } catch (error) {
+          failed += 1
+          patchQueue(item.id, {
+            status: 'error',
+            error:
+              error instanceof Error ? error.message : 'Operazione non riuscita.',
+          })
+        }
       }
-
-      setMessage('Indicizzazione in corso…')
-      await runIndexing(created.catalogId, created.jobId)
-      setMessage('Indicizzazione completata.')
-      setFile(undefined)
-      setProgress(0)
-      await refresh()
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Operazione non riuscita.')
+      setQueue((current) => current.filter((item) => !finished.has(item.id)))
+      const summary = [
+        completed === 1
+          ? '1 catalogo indicizzato'
+          : completed > 1
+            ? `${completed} cataloghi indicizzati`
+            : '',
+        failed === 1 ? '1 errore' : failed > 1 ? `${failed} errori` : '',
+      ]
+        .filter(Boolean)
+        .join(', ')
+      setMessage(summary ? `${summary}.` : 'Nessun catalogo elaborato.')
+      await refresh(true)
     } finally {
       setBusy(false)
     }
@@ -361,6 +479,12 @@ export function AdminCatalogs() {
       </div>
     )
   }
+  const runnable = queue.filter(
+    (item) => item.status === 'pending' || item.status === 'error',
+  )
+  const onlyErrors =
+    runnable.length > 0 && runnable.every((item) => item.status === 'error')
+
   if (role !== 'admin') {
     return (
       <div className="admin-empty">
@@ -383,13 +507,76 @@ export function AdminCatalogs() {
         </div>
       </header>
       <form className="upload-card" onSubmit={submitCatalog}>
-        <div className="upload-title"><FileUp /><div><h3>Nuovo catalogo PDF</h3><p>Carica il documento: tutti i dati vengono riconosciuti automaticamente.</p></div></div>
-        <label className="file-drop">
-          <input name="catalogPdf" type="file" accept="application/pdf,.pdf" onChange={(e) => setFile(e.target.files?.[0])} required />
+        <div className="upload-title"><FileUp /><div><h3>Nuovi cataloghi PDF</h3><p>Carica uno o più documenti: i dati vengono riconosciuti automaticamente, un catalogo alla volta.</p></div></div>
+        <label
+          className={`file-drop${dragOver ? ' drag-over' : ''}`}
+          onDragEnter={(event) => {
+            event.preventDefault()
+            if (!busy) setDragOver(true)
+          }}
+          onDragOver={(event) => {
+            event.preventDefault()
+            if (!busy) setDragOver(true)
+          }}
+          onDragLeave={(event) => {
+            const next = event.relatedTarget
+            if (!(next instanceof Node) || !event.currentTarget.contains(next)) {
+              setDragOver(false)
+            }
+          }}
+          onDrop={(event) => {
+            event.preventDefault()
+            setDragOver(false)
+            if (!busy && event.dataTransfer.files.length) {
+              addFiles(event.dataTransfer.files)
+            }
+          }}
+        >
+          <input
+            name="catalogPdf"
+            type="file"
+            accept="application/pdf,.pdf"
+            multiple
+            disabled={busy}
+            onChange={(event) => {
+              if (event.target.files?.length) addFiles(event.target.files)
+              event.target.value = ''
+            }}
+          />
           <FileUp />
-          <strong>{file?.name || 'Seleziona o trascina un PDF'}</strong>
-          <span>Massimo 250 MB</span>
+          <strong>
+            {queue.length
+              ? `${queue.length} PDF in coda`
+              : 'Seleziona o trascina uno o più PDF'}
+          </strong>
+          <span>Massimo 250 MB per file. L’indicizzazione procede in sequenza.</span>
         </label>
+        {queue.length > 0 && (
+          <ul className="upload-queue">
+            {queue.map((item) => (
+              <li key={item.id} className={`upload-queue-item ${item.status}`}>
+                <strong title={item.file.name}>{item.file.name}</strong>
+                <span className={`queue-status ${item.status}`}>
+                  {queueStatusLabel(item)}
+                </span>
+                {(item.status === 'pending' || item.status === 'error') && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setQueue((current) =>
+                        current.filter((entry) => entry.id !== item.id),
+                      )
+                    }
+                    disabled={busy}
+                    aria-label={`Rimuovi ${item.file.name}`}
+                  >
+                    <X size={15} />
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
         <div className="auto-detect-note">
           <CheckCircle2 size={18} />
           <div>
@@ -397,15 +584,31 @@ export function AdminCatalogs() {
             <span>Brand, modello, versione, revisione, cliente, ordine e matricole saranno estratti dal PDF.</span>
           </div>
         </div>
-        {busy && progress > 0 && <div className="upload-progress"><span style={{ width: `${progress}%` }} /></div>}
-        <button className="primary-button" disabled={busy || !file}>
+        {busy && queue.some((item) => item.status === 'uploading') && (
+          <div className="upload-progress">
+            <span
+              style={{
+                width: `${queue.find((item) => item.status === 'uploading')?.progress || 0}%`,
+              }}
+            />
+          </div>
+        )}
+        <button className="primary-button" disabled={busy || runnable.length === 0}>
           {busy ? <LoaderCircle className="spin" size={18} /> : <FileUp size={18} />}
-          {busy ? 'Operazione in corso' : 'Carica e indicizza'}
+          {busy
+            ? 'Operazione in corso'
+            : onlyErrors
+              ? runnable.length > 1
+                ? `Riprova i cataloghi in errore (${runnable.length})`
+                : 'Riprova il catalogo in errore'
+              : runnable.length > 1
+                ? `Carica e indicizza (${runnable.length})`
+                : 'Carica e indicizza'}
         </button>
         {message && <p className="form-message">{message}</p>}
       </form>
       <div className="catalog-admin-list">
-        <div className="list-heading"><h3>Cataloghi</h3><button onClick={() => void refresh()}><RefreshCw size={16} /> Aggiorna</button></div>
+        <div className="list-heading"><h3>Cataloghi</h3><button type="button" onClick={() => void refresh()} disabled={busy}><RefreshCw size={16} /> Aggiorna</button></div>
         {catalogs.map((catalog) => {
           const bundled = catalog.source === 'bundled' || catalog.id.startsWith('bundled:')
           const job = catalog.ingestion_jobs?.at(0)
