@@ -20,7 +20,7 @@ import {
   UserRound,
   X,
 } from 'lucide-react'
-import { FormEvent, useEffect, useRef, useState } from 'react'
+import { FormEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { catalog, exampleSearches, type Part } from './data/catalog'
 import PartsCatalog from './components/PartsCatalog'
 import ExplodedView, {
@@ -30,6 +30,7 @@ import { AdminCatalogs } from './components/AdminCatalogs'
 import { BrandMark } from './components/BrandMark'
 import { ChatHistory } from './components/ChatHistory'
 import { MachinePicker } from './components/MachinePicker'
+import { partKey, PartsSidebar } from './components/PartsSidebar'
 import {
   ApiError,
   askPartsAssistant,
@@ -272,13 +273,7 @@ function PartCard({
   )
 }
 
-function ChatMessage({
-  message,
-  onOpenExploded,
-}: {
-  message: Message
-  onOpenExploded?: (part: Part) => void
-}) {
+function ChatMessage({ message }: { message: Message }) {
   const isAssistant = message.sender === 'assistant'
 
   return (
@@ -304,21 +299,6 @@ function ChatMessage({
             Prova con il nome comune del componente, la categoria o il codice.
           </div>
         )}
-        {!!message.results?.length && (
-          <div className="results-list">
-            <div className="results-heading">
-              <span>{message.results.length} ricambi compatibili</span>
-              <span>Ordinati per pertinenza</span>
-            </div>
-            {message.results.map((part) => (
-              <PartCard
-                key={`${part.code}-${part.item}-${part.page}`}
-                part={part}
-                onOpenExploded={onOpenExploded}
-              />
-            ))}
-          </div>
-        )}
       </div>
     </div>
   )
@@ -331,6 +311,7 @@ function App() {
   const [selectedSerial, setSelectedSerial] = useState<string>()
   const [input, setInput] = useState('')
   const [pendingImage, setPendingImage] = useState<ChatImagePayload>()
+  const [selectedPartKey, setSelectedPartKey] = useState<string>()
   const [messages, setMessages] = useState<Message[]>([initialMessage])
   const [isThinking, setIsThinking] = useState(false)
   const [indexedPartCount, setIndexedPartCount] = useState(585)
@@ -344,6 +325,18 @@ function App() {
   const messageId = useRef(2)
   const scrollArea = useRef<HTMLDivElement>(null)
   const imageInputRef = useRef<HTMLInputElement>(null)
+
+  const compatibleParts = useMemo(() => {
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const results = messages[index]?.results
+      if (results?.length) return results
+    }
+    return []
+  }, [messages])
+
+  useEffect(() => {
+    setSelectedPartKey(undefined)
+  }, [compatibleParts])
 
   const placeholder =
     phase === 'serial'
@@ -582,6 +575,7 @@ function App() {
     setInput('')
     setPendingImage(undefined)
     setExplodedSelection(undefined)
+    setSelectedPartKey(undefined)
     messageId.current = Math.max(...thread.messages.map((message) => message.id), 1) + 1
   }
 
@@ -596,6 +590,7 @@ function App() {
       setInput('')
       setPendingImage(undefined)
       setExplodedSelection(undefined)
+      setSelectedPartKey(undefined)
       messageId.current = 2
       setMessages([{ ...initialMessage }])
       return
@@ -734,7 +729,7 @@ function App() {
           </div>
 
           {activeView === 'chat' ? (
-            <div className="chat-stage">
+            <div className={`chat-stage${compatibleParts.length ? ' has-parts' : ''}`}>
               <ChatHistory
                 threads={threads}
                 activeId={activeThreadId}
@@ -747,11 +742,7 @@ function App() {
               <div className="chat-scroll" ref={scrollArea}>
                 <div className="conversation">
                   {messages.map((message) => (
-                    <ChatMessage
-                      key={message.id}
-                      message={message}
-                      onOpenExploded={openExplodedPart}
-                    />
+                    <ChatMessage key={message.id} message={message} />
                   ))}
                   {isThinking && (
                     <div className="message-row assistant">
@@ -856,6 +847,17 @@ function App() {
                 </p>
               </div>
               </div>
+              {compatibleParts.length > 0 && (
+                <PartsSidebar
+                  parts={compatibleParts}
+                  selectedKey={selectedPartKey}
+                  onSelect={setSelectedPartKey}
+                  onBack={() => setSelectedPartKey(undefined)}
+                  renderDetail={(part) => (
+                    <PartCard part={part} onOpenExploded={openExplodedPart} />
+                  )}
+                />
+              )}
             </div>
           ) : activeView === 'catalog' ? (
             <div className="catalog-scroll">

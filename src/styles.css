@@ -160,6 +160,93 @@ button {
   grid-template-columns: 248px minmax(0, 1fr);
 }
 
+.chat-stage.has-parts {
+  grid-template-columns: 248px minmax(0, 1fr) 340px;
+}
+
+.parts-sidebar {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  border-left: 1px solid #e1e8f0;
+}
+
+.parts-sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 14px 14px 10px;
+  border-bottom: 1px solid #e8edf3;
+}
+
+.parts-sidebar-header strong {
+  color: #1b334b;
+  font-size: 13px;
+}
+
+.parts-sidebar-header > span {
+  color: #64788c;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.parts-sidebar-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  color: #1557cf;
+  background: transparent;
+  border: 0;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.parts-sidebar-list {
+  min-height: 0;
+  margin: 0;
+  padding: 8px;
+  overflow: auto;
+  list-style: none;
+}
+
+.parts-sidebar-list button {
+  width: 100%;
+  display: grid;
+  gap: 3px;
+  padding: 10px;
+  text-align: left;
+  color: #243b52;
+  background: transparent;
+  border: 0;
+  border-radius: 10px;
+}
+
+.parts-sidebar-list button strong {
+  font-size: 13px;
+}
+
+.parts-sidebar-list button span {
+  color: #6d8094;
+  font-size: 11px;
+}
+
+.parts-sidebar-list button:hover {
+  background: #f3f8ff;
+}
+
+.parts-sidebar-detail {
+  min-height: 0;
+  overflow: auto;
+  padding: 12px;
+}
+
+.parts-sidebar .part-card:hover {
+  transform: none;
+}
+
 .chat-history {
   min-height: 0;
   display: flex;
@@ -1380,10 +1467,28 @@ a.pdf-reference:hover {
   }
 }
 
+@media (max-width: 1180px) {
+  .chat-stage.has-parts {
+    grid-template-columns: 248px minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) minmax(220px, 38%);
+  }
+
+  .parts-sidebar {
+    grid-column: 1 / -1;
+    border-left: 0;
+    border-top: 1px solid #e1e8f0;
+  }
+}
+
 @media (max-width: 900px) {
-  .chat-stage {
+  .chat-stage,
+  .chat-stage.has-parts {
     grid-template-columns: 1fr;
     grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .chat-stage.has-parts {
+    grid-template-rows: auto minmax(0, 1fr) minmax(220px, 38%);
   }
 
   .chat-history {
