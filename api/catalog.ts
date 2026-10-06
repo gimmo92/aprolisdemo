@@ -5,6 +5,8 @@ import {
   getAllBundledParts,
   getIndexStats,
   getPublicCatalog,
+  listLocalMachines,
+  type ChatMachine,
 } from './lib/retrieval.js'
 import {
   createSignedPdfUrl,
@@ -60,21 +62,52 @@ export default async function handler(
       const [{ data: readyCatalogs }, { data: serials }] = await Promise.all([
         supabase
           .from('catalogs')
-          .select('id, original_filename, part_count, status')
+          .select('id, brand, model, version, original_filename, part_count, status')
           .in('status', ['ready', 'needs_review']),
-        supabase.from('catalog_serials').select('serial_number'),
+        supabase.from('catalog_serials').select('catalog_id, serial_number'),
       ])
       const listable = (readyCatalogs || []).filter(
         (catalog) => (catalog.part_count || 0) > 0,
       )
+      const serialsByCatalog = new Map<string, string[]>()
+      for (const row of serials || []) {
+        const list = serialsByCatalog.get(row.catalog_id) || []
+        list.push(row.serial_number)
+        serialsByCatalog.set(row.catalog_id, list)
+      }
+      const remoteMachines: ChatMachine[] = listable.flatMap((catalog) => {
+        const serialNumbers = serialsByCatalog.get(catalog.id) || []
+        const serial = serialNumbers.find((value) => value.trim().length >= 4)
+        if (!serial) return []
+        return [
+          {
+            id: catalog.id,
+            brand: catalog.brand,
+            model: catalog.model,
+            version: catalog.version || '',
+            serial,
+            serialNumbers,
+            partCount: catalog.part_count || 0,
+          },
+        ]
+      })
       const bundled = getAllBundledParts(
         listable.map((row) => row.original_filename),
+      )
+      const machines = [...remoteMachines, ...listLocalMachines(
+        listable.map((row) => row.original_filename),
+      )].sort((left, right) =>
+        `${left.brand} ${left.model}`.localeCompare(
+          `${right.brand} ${right.model}`,
+          'it',
+        ),
       )
       const readyParts = listable.reduce(
         (total, catalog) => total + (catalog.part_count || 0),
         0,
       )
       return response.status(200).json({
+        machines,
         stats: {
           catalogs: listable.length + (bundled?.catalogs.length || 0),
           parts: readyParts + (bundled?.parts.length || 0),
@@ -88,7 +121,10 @@ export default async function handler(
         },
       })
     }
-    return response.status(200).json({ stats: getIndexStats() })
+    return response.status(200).json({
+      machines: listLocalMachines(),
+      stats: getIndexStats(),
+    })
   }
 
   const remote = isSupabaseConfigured()

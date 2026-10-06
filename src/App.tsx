@@ -28,12 +28,15 @@ import ExplodedView, {
 } from './components/ExplodedView'
 import { AdminCatalogs } from './components/AdminCatalogs'
 import { BrandMark } from './components/BrandMark'
+import { ChatHistory } from './components/ChatHistory'
+import { MachinePicker } from './components/MachinePicker'
 import {
   ApiError,
   askPartsAssistant,
   getCatalogStats,
   identifyCatalog,
   type ChatHistoryItem,
+  type ChatMachine,
 } from './lib/api'
 import { useAuth } from './lib/auth'
 
@@ -60,7 +63,59 @@ const initialMessage: Message = {
   id: 1,
   sender: 'assistant',
   eyebrow: 'Assistente ricambi',
-  text: 'Buongiorno! Indica la matricola, il modello (es. T135) o il nome del catalogo. Poi cerca il ricambio, anche nella stessa frase. In ricerca puoi anche caricare una foto del pezzo.',
+  text: 'Buongiorno! Scegli la macchina dal menu, oppure indica matricola o modello. Poi cerca il ricambio: in ricerca puoi anche caricare una foto del pezzo.',
+}
+
+type ChatThread = {
+  id: string
+  title: string
+  updatedAt: number
+  phase: Phase
+  selectedSerial?: string
+  messages: Message[]
+}
+
+function chatStorageKey(userId: string) {
+  return `aftercore-chat-history:${userId}`
+}
+
+function threadTitle(messages: Message[]) {
+  const firstUser = messages.find(
+    (message) => message.sender === 'user' && message.text.trim(),
+  )
+  if (!firstUser) return 'Nuova ricerca'
+  const text = firstUser.text.replace(/\s+/g, ' ').trim()
+  return text.length > 42 ? `${text.slice(0, 42)}…` : text
+}
+
+function blankThread(): ChatThread {
+  return {
+    id: crypto.randomUUID(),
+    title: 'Nuova ricerca',
+    updatedAt: Date.now(),
+    phase: 'serial',
+    messages: [{ ...initialMessage }],
+  }
+}
+
+function storedMessages(messages: Message[]) {
+  return messages.map((message) => {
+    const copy = { ...message }
+    delete copy.imageUrl
+    return copy
+  })
+}
+
+function loadThreads(userId: string) {
+  try {
+    const raw = localStorage.getItem(chatStorageKey(userId))
+    if (!raw) return []
+    const parsed = JSON.parse(raw) as ChatThread[]
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter((thread) => thread?.id && Array.isArray(thread.messages))
+  } catch {
+    return []
+  }
 }
 
 const LOOKUP_STOPWORDS = new Set([
@@ -279,6 +334,11 @@ function App() {
   const [messages, setMessages] = useState<Message[]>([initialMessage])
   const [isThinking, setIsThinking] = useState(false)
   const [indexedPartCount, setIndexedPartCount] = useState(585)
+  const [machines, setMachines] = useState<ChatMachine[]>([])
+  const [machinesLoaded, setMachinesLoaded] = useState(false)
+  const [threads, setThreads] = useState<ChatThread[]>([])
+  const [activeThreadId, setActiveThreadId] = useState('')
+  const loadedHistoryFor = useRef<string | null>(null)
   const [explodedSelection, setExplodedSelection] =
     useState<ExplodedSelection>()
   const messageId = useRef(2)
@@ -294,9 +354,54 @@ function App() {
 
   useEffect(() => {
     getCatalogStats()
-      .then(({ stats }) => setIndexedPartCount(stats.parts))
+      .then(({ stats, machines: listed }) => {
+        setIndexedPartCount(stats.parts)
+        setMachines(listed || [])
+      })
       .catch(() => undefined)
+      .finally(() => setMachinesLoaded(true))
   }, [])
+
+  useEffect(() => {
+    loadedHistoryFor.current = null
+    const stored = loadThreads(session.user.id)
+    const initial = stored.length ? stored : [blankThread()]
+    const current = [...initial].sort((left, right) => right.updatedAt - left.updatedAt)[0]
+    setThreads(initial)
+    setActiveThreadId(current.id)
+    setMessages(current.messages)
+    setPhase(current.phase)
+    setSelectedSerial(current.selectedSerial)
+    messageId.current = Math.max(...current.messages.map((message) => message.id), 1) + 1
+  }, [session.user.id])
+
+  useEffect(() => {
+    if (!activeThreadId) return
+    if (loadedHistoryFor.current !== session.user.id) {
+      loadedHistoryFor.current = session.user.id
+      return
+    }
+    setThreads((current) => {
+      if (!current.some((thread) => thread.id === activeThreadId)) return current
+      const next = current.map((thread) =>
+        thread.id === activeThreadId
+          ? {
+              ...thread,
+              title: threadTitle(messages),
+              updatedAt: Date.now(),
+              phase,
+              selectedSerial,
+              messages: storedMessages(messages),
+            }
+          : thread,
+      )
+      const capped = [...next]
+        .sort((left, right) => right.updatedAt - left.updatedAt)
+        .slice(0, 30)
+      localStorage.setItem(chatStorageKey(session.user.id), JSON.stringify(capped))
+      return capped
+    })
+  }, [activeThreadId, messages, phase, selectedSerial, session.user.id])
 
   useEffect(() => {
     const area = scrollArea.current
@@ -372,8 +477,8 @@ function App() {
     }
   }
 
-  const handleSerial = async (value: string) => {
-    addMessage({ sender: 'user', text: value })
+  const handleSerial = async (value: string, displayText = value) => {
+    addMessage({ sender: 'user', text: displayText })
     setIsThinking(true)
 
     try {
@@ -410,7 +515,7 @@ function App() {
     } catch (error) {
       const message =
         error instanceof ApiError && error.status === 404
-          ? `Non trovo matricola, macchina o catalogo per “${value}”. Prova con 13510073, T135 o il nome del catalogo.`
+          ? `Non trovo matricola, macchina o catalogo per “${displayText}”. Prova con 13510073, T135 o il nome del catalogo.`
           : error instanceof Error
             ? error.message
             : 'Non riesco a individuare il catalogo in questo momento.'
@@ -466,16 +571,55 @@ function App() {
     void handleSearch(value, image)
   }
 
-  const reset = () => {
-    setActiveView('chat')
-    setPhase('serial')
-    setSelectedSerial(undefined)
+  const applyThread = (thread: ChatThread) => {
+    setActiveThreadId(thread.id)
+    setPhase(thread.phase)
+    setSelectedSerial(thread.selectedSerial)
+    setMessages(thread.messages)
     setInput('')
     setPendingImage(undefined)
-    setIsThinking(false)
     setExplodedSelection(undefined)
-    messageId.current = 2
-    setMessages([initialMessage])
+    messageId.current = Math.max(...thread.messages.map((message) => message.id), 1) + 1
+  }
+
+  const reset = () => {
+    if (isThinking) return
+    setActiveView('chat')
+    setIsThinking(false)
+    const hasUserMessage = messages.some((message) => message.sender === 'user')
+    if (!hasUserMessage) {
+      setPhase('serial')
+      setSelectedSerial(undefined)
+      setInput('')
+      setPendingImage(undefined)
+      setExplodedSelection(undefined)
+      messageId.current = 2
+      setMessages([{ ...initialMessage }])
+      return
+    }
+    const thread = blankThread()
+    setThreads((current) => [thread, ...current])
+    applyThread(thread)
+  }
+
+  const openThread = (id: string) => {
+    if (isThinking || id === activeThreadId) return
+    const thread = threads.find((item) => item.id === id)
+    if (!thread) return
+    setActiveView('chat')
+    applyThread(thread)
+  }
+
+  const deleteThread = (id: string) => {
+    if (isThinking) return
+    const remaining = threads.filter((thread) => thread.id !== id)
+    const next = remaining.length ? remaining : [blankThread()]
+    setThreads(next)
+    localStorage.setItem(chatStorageKey(session.user.id), JSON.stringify(next))
+    if (id === activeThreadId) {
+      const current = [...next].sort((left, right) => right.updatedAt - left.updatedAt)[0]
+      applyThread(current)
+    }
   }
 
   const handleSuggestion = (value: string) => {
@@ -587,7 +731,16 @@ function App() {
           </div>
 
           {activeView === 'chat' ? (
-            <>
+            <div className="chat-stage">
+              <ChatHistory
+                threads={threads}
+                activeId={activeThreadId}
+                disabled={isThinking}
+                onOpen={openThread}
+                onCreate={reset}
+                onDelete={deleteThread}
+              />
+              <div className="chat-main">
               <div className="chat-scroll" ref={scrollArea}>
                 <div className="conversation">
                   {messages.map((message) => (
@@ -611,6 +764,18 @@ function App() {
               </div>
 
               <div className="composer-wrap">
+                <MachinePicker
+                  machines={machines}
+                  loading={!machinesLoaded}
+                  selectedSerial={selectedSerial}
+                  disabled={isThinking || !machinesLoaded}
+                  onSelect={(machine) =>
+                    void handleSerial(
+                      machine.serial,
+                      `${machine.brand} · ${machine.model}`,
+                    )
+                  }
+                />
                 {phase === 'search' && (
                   <div className="suggestions">
                     <span>Ricerche rapide</span>
@@ -687,7 +852,8 @@ function App() {
                   <ArrowRight size={13} />
                 </p>
               </div>
-            </>
+              </div>
+            </div>
           ) : activeView === 'catalog' ? (
             <div className="catalog-scroll">
               <PartsCatalog />

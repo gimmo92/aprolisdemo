@@ -397,3 +397,37 @@ export function getIndexStats() {
     serialNumbers: catalogs.flatMap((catalog) => catalog.serialNumbers),
   }
 }
+
+export type ChatMachine = {
+  id: string
+  brand: string
+  model: string
+  version: string
+  serial: string
+  serialNumbers: string[]
+  partCount: number
+}
+
+export function listLocalMachines(
+  excludeDocumentNames: Iterable<string> = [],
+): ChatMachine[] {
+  const excluded = new Set(
+    [...excludeDocumentNames].map((name) => name.trim().toLocaleLowerCase('it')),
+  )
+  return catalogs.flatMap((catalog) => {
+    if (excluded.has(catalog.documentName.trim().toLocaleLowerCase('it'))) return []
+    const serial = catalog.serialNumbers.find((value) => value.trim().length >= 4)
+    if (!serial || catalog.partCount < 1) return []
+    return [
+      {
+        id: catalog.id,
+        brand: catalog.brand,
+        model: catalog.model,
+        version: catalog.version,
+        serial,
+        serialNumbers: catalog.serialNumbers,
+        partCount: catalog.partCount,
+      },
+    ]
+  })
+}

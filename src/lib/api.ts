@@ -171,8 +171,21 @@ export function getExplodedView(viewId: string) {
   )
 }
 
+export type ChatMachine = {
+  id: string
+  brand: string
+  model: string
+  version: string
+  serial: string
+  serialNumbers: string[]
+  partCount: number
+}
+
 export function getCatalogStats() {
-  return apiFetch<{ stats: { catalogs: number; parts: number } }>('/api/catalog')
+  return apiFetch<{
+    machines?: ChatMachine[]
+    stats: { catalogs: number; parts: number }
+  }>('/api/catalog')
 }
 
 export function askPartsAssistant(

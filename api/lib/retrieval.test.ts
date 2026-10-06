@@ -6,6 +6,7 @@ import {
   getIndexStats,
   getPublicCatalog,
   listBundledCatalogs,
+  listLocalMachines,
   searchParts,
 } from './retrieval.js'
 
@@ -49,6 +50,18 @@ describe('catalog retrieval', () => {
 
   it('never searches outside a verified serial number', () => {
     expect(searchParts('not-a-serial', 'brake')).toEqual([])
+  })
+
+  it('lists local machines that can be chosen in chat', () => {
+    const machines = listLocalMachines()
+    expect(machines).toEqual([
+      expect.objectContaining({
+        brand: 'Charlatte Manutention',
+        model: 'T135',
+        serial: '13510073',
+        serialNumbers: ['13510073', '13510074'],
+      }),
+    ])
   })
 
   it('reports the generated and curated index size', () => {
