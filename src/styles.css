@@ -682,11 +682,113 @@ button {
 }
 
 .parts-table tbody tr {
+  cursor: pointer;
   transition: 120ms ease;
 }
 
-.parts-table tbody tr:hover {
+.parts-table tbody tr:hover,
+.parts-table tbody tr.is-selected {
   background: #f8fbff;
+}
+
+.parts-table tbody tr.is-selected td:first-child {
+  box-shadow: inset 3px 0 0 var(--blue-600);
+}
+
+.catalog-body.has-detail {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: 12px;
+  align-items: start;
+}
+
+.parts-catalog:has(.has-detail) {
+  width: min(100%, 1320px);
+}
+
+.catalog-part-detail {
+  position: sticky;
+  top: 0;
+  padding: 16px;
+  background: white;
+  border: 1px solid #dce5ee;
+  border-radius: 13px;
+}
+
+.catalog-part-detail header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.catalog-part-detail h3 {
+  margin: 4px 0 0;
+  color: #1b334b;
+  font: 700 16px 'Manrope', sans-serif;
+  letter-spacing: -0.02em;
+}
+
+.catalog-part-detail header p {
+  margin: 4px 0 0;
+  color: #8b99a8;
+  font-size: 11px;
+}
+
+.catalog-detail-close {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  display: grid;
+  place-items: center;
+  color: #63788e;
+  background: #f4f7fa;
+  border: 0;
+  border-radius: 8px;
+}
+
+.catalog-detail-close:hover {
+  color: var(--blue-800);
+  background: var(--blue-50);
+}
+
+.catalog-part-detail dl {
+  display: grid;
+  gap: 8px;
+  margin: 14px 0 0;
+}
+
+.catalog-part-detail dl > div {
+  padding: 9px 10px;
+  background: #f7f9fb;
+  border-radius: 8px;
+}
+
+.catalog-part-detail dt,
+.catalog-part-detail dd {
+  margin: 0;
+}
+
+.catalog-part-detail dt {
+  margin-bottom: 4px;
+  color: #8a99a9;
+  font-size: 8px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.catalog-part-detail dd {
+  color: #2c465f;
+  font: 700 12px 'Manrope', sans-serif;
+  word-break: break-word;
+}
+
+.catalog-part-detail dd small {
+  display: block;
+  margin-top: 4px;
+  color: #93a0ad;
+  font: 600 9px 'Manrope', sans-serif;
 }
 
 .parts-table td:nth-child(2) strong,
@@ -1489,6 +1591,15 @@ a.pdf-reference:hover {
 
   .chat-stage.has-parts {
     grid-template-rows: auto minmax(0, 1fr) minmax(220px, 38%);
+  }
+
+  .catalog-body.has-detail {
+    grid-template-columns: 1fr;
+  }
+
+  .catalog-part-detail {
+    position: static;
+    order: -1;
   }
 
   .chat-history {

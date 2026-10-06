@@ -7,6 +7,7 @@ import {
   RotateCcw,
   Search,
   SlidersHorizontal,
+  X,
 } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import {
@@ -41,6 +42,16 @@ function positionSortKey(value: string | number | undefined) {
   return { empty: 0, nums, text: text.toLocaleLowerCase('it') }
 }
 
+function catalogPartKey(part: CatalogPart, fallbackCatalogId?: string) {
+  return `${part.catalogId || fallbackCatalogId || ''}-${part.code}-${part.item}-${part.page}`
+}
+
+function sourceLabel(sourceType: CatalogPart['sourceType']) {
+  if (sourceType === 'mechanical') return 'Meccanico'
+  if (sourceType === 'electrical') return 'Elettrico'
+  return 'Generico'
+}
+
 function comparePosition(left: string | number | undefined, right: string | number | undefined) {
   const a = positionSortKey(left)
   const b = positionSortKey(right)
@@ -51,6 +62,99 @@ function comparePosition(left: string | number | undefined, right: string | numb
     if (delta) return delta
   }
   return a.text.localeCompare(b.text, 'it', { numeric: true })
+}
+
+function CatalogPartDetail({
+  part,
+  catalogId,
+  documentName,
+  documentPages,
+  onClose,
+}: {
+  part: CatalogPart
+  catalogId?: string
+  documentName?: string
+  documentPages?: number
+  onClose: () => void
+}) {
+  const pdfHref =
+    part.pdfAvailable && catalogId && catalogId !== 'all-ready'
+      ? `/api/catalog?catalogId=${encodeURIComponent(catalogId)}&page=${part.page}`
+      : undefined
+
+  return (
+    <aside className="catalog-part-detail" aria-label="Dettaglio ricambio">
+      <header>
+        <div>
+          <span className="catalog-kicker">Dettaglio</span>
+          <h3>{part.description}</h3>
+          {part.originalDescription !== part.description && (
+            <p>{part.originalDescription}</p>
+          )}
+        </div>
+        <button
+          type="button"
+          className="catalog-detail-close"
+          onClick={onClose}
+          aria-label="Chiudi dettagli"
+        >
+          <X size={16} />
+        </button>
+      </header>
+      <dl>
+        <div>
+          <dt>Codice</dt>
+          <dd>{part.code}</dd>
+        </div>
+        <div>
+          <dt>Quantità</dt>
+          <dd>{part.quantity}</dd>
+        </div>
+        <div>
+          <dt>Posizione</dt>
+          <dd>{part.item || '—'}</dd>
+        </div>
+        <div>
+          <dt>Tipo</dt>
+          <dd>{sourceLabel(part.sourceType)}</dd>
+        </div>
+        <div>
+          <dt>Categoria</dt>
+          <dd>{part.category || '—'}</dd>
+        </div>
+        {part.catalogName && (
+          <div>
+            <dt>Macchina</dt>
+            <dd>{part.catalogName}</dd>
+          </div>
+        )}
+        {(part.assemblyCode || part.assemblyTitle) && (
+          <div>
+            <dt>Assieme</dt>
+            <dd>{[part.assemblyCode, part.assemblyTitle].filter(Boolean).join(' · ')}</dd>
+          </div>
+        )}
+        <div>
+          <dt>Tavola</dt>
+          <dd>
+            {pdfHref ? (
+              <a className="pdf-reference" href={pdfHref} target="_blank" rel="noreferrer">
+                <FileText size={15} />
+                Pagina {part.page}
+                {documentPages ? ` / ${documentPages}` : ''}
+              </a>
+            ) : (
+              <span>
+                Pagina {part.page}
+                {documentPages ? ` / ${documentPages}` : ''}
+              </span>
+            )}
+            {documentName && <small>{documentName}</small>}
+          </dd>
+        </div>
+      </dl>
+    </aside>
+  )
 }
 
 type Props = {
@@ -67,6 +171,7 @@ export default function PartsCatalog({ serial }: Props) {
   const [sourceType, setSourceType] = useState('')
   const [pdfPage, setPdfPage] = useState('')
   const [currentPage, setCurrentPage] = useState(1)
+  const [selectedKey, setSelectedKey] = useState<string>()
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState('')
 
@@ -150,7 +255,12 @@ export default function PartsCatalog({ serial }: Props) {
 
   useEffect(() => {
     setCurrentPage(1)
-  }, [query, machine, category, sourceType, pdfPage])
+    setSelectedKey(undefined)
+  }, [query, machine, category, sourceType, pdfPage, serial])
+
+  const selectedPart = filteredParts.find(
+    (part) => catalogPartKey(part, catalog?.id) === selectedKey,
+  )
 
   const totalPages = Math.max(1, Math.ceil(filteredParts.length / PAGE_SIZE))
   const visibleParts = filteredParts.slice(
@@ -276,6 +386,7 @@ export default function PartsCatalog({ serial }: Props) {
         </span>
       </div>
 
+      <div className={`catalog-body${selectedPart ? ' has-detail' : ''}`}>
       <div className="parts-table-wrap">
         <table className="parts-table">
           <thead>
@@ -293,8 +404,20 @@ export default function PartsCatalog({ serial }: Props) {
               const partCatalogId = part.catalogId || catalog?.id
               const documentName = part.documentName || catalog?.documentName
               const documentPages = part.documentPages || catalog?.documentPages
+              const key = catalogPartKey(part, catalog?.id)
               return (
-              <tr key={`${partCatalogId}-${part.code}-${part.item}-${part.page}`}>
+              <tr
+                key={key}
+                className={key === selectedKey ? 'is-selected' : undefined}
+                tabIndex={0}
+                aria-selected={key === selectedKey}
+                onClick={() => setSelectedKey(key)}
+                onKeyDown={(event) => {
+                  if (event.key !== 'Enter' && event.key !== ' ') return
+                  event.preventDefault()
+                  setSelectedKey(key)
+                }}
+              >
                 <td data-label="Codice">
                   <strong className="part-code">{part.code}</strong>
                 </td>
@@ -311,11 +434,7 @@ export default function PartsCatalog({ serial }: Props) {
                 <td data-label="Posizione">{part.item}</td>
                 <td data-label="Tipo">
                   <span className={`source-badge ${part.sourceType}`}>
-                    {part.sourceType === 'mechanical'
-                      ? 'Meccanico'
-                      : part.sourceType === 'electrical'
-                        ? 'Elettrico'
-                        : 'Generico'}
+                    {sourceLabel(part.sourceType)}
                   </span>
                 </td>
                 <td data-label="Tavola">
@@ -326,6 +445,7 @@ export default function PartsCatalog({ serial }: Props) {
                       target="_blank"
                       rel="noreferrer"
                       title={`Apri ${documentName || 'PDF'} a pagina ${part.page}`}
+                      onClick={(event) => event.stopPropagation()}
                     >
                       <FileText size={15} />
                       Pagina {part.page} / {documentPages}
@@ -349,6 +469,16 @@ export default function PartsCatalog({ serial }: Props) {
             <span>Modifica o azzera i filtri applicati.</span>
           </div>
         )}
+      </div>
+      {selectedPart && (
+        <CatalogPartDetail
+          part={selectedPart}
+          catalogId={selectedPart.catalogId || catalog?.id}
+          documentName={selectedPart.documentName || catalog?.documentName}
+          documentPages={selectedPart.documentPages || catalog?.documentPages}
+          onClose={() => setSelectedKey(undefined)}
+        />
+      )}
       </div>
 
       <div className="catalog-pagination">
