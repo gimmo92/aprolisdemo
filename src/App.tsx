@@ -30,7 +30,7 @@ import { AdminCatalogs } from './components/AdminCatalogs'
 import { BrandMark } from './components/BrandMark'
 import { ChatHistory } from './components/ChatHistory'
 import { MachinePicker } from './components/MachinePicker'
-import { partKey, PartsSidebar } from './components/PartsSidebar'
+import { PartsSidebar } from './components/PartsSidebar'
 import {
   ApiError,
   askPartsAssistant,
