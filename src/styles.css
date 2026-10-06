@@ -1181,6 +1181,301 @@ a.pdf-reference:hover {
   letter-spacing: 0.02em;
 }
 
+.part-stock {
+  margin-top: 10px;
+  padding: 8px 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.part-stock.in {
+  color: #0d7a4b;
+  background: #e8f7ef;
+}
+
+.part-stock.out {
+  color: #9a3412;
+  background: #fff1e8;
+}
+
+.part-stock strong {
+  font: 700 11px 'Manrope', sans-serif;
+}
+
+.part-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin: 10px 0 14px;
+}
+
+.part-actions button {
+  min-height: 34px;
+  padding: 6px 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  color: var(--blue-800);
+  background: white;
+  border: 1px solid #c5d7ea;
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.part-actions button.primary {
+  color: white;
+  background: var(--blue-800);
+  border-color: var(--blue-800);
+}
+
+.part-actions button:hover {
+  border-color: var(--blue-600);
+}
+
+.part-actions button.primary:hover {
+  background: var(--blue-700);
+}
+
+.quote-page {
+  min-height: 100vh;
+  padding: 28px 16px 48px;
+  background: #e7eef6;
+}
+
+.quote-toolbar {
+  width: min(820px, 100%);
+  margin: 0 auto 14px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.quote-toolbar button {
+  height: 40px;
+  padding: 0 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: white;
+  background: var(--blue-800);
+  border: 0;
+  border-radius: 9px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.quote-sheet {
+  width: min(820px, 100%);
+  margin: 0 auto;
+  padding: 36px 40px 28px;
+  background: white;
+  border: 1px solid #d5e0eb;
+  border-radius: 8px;
+  box-shadow: 0 16px 40px rgba(20, 48, 80, 0.08);
+}
+
+.quote-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 18px;
+  border-bottom: 2px solid var(--blue-800);
+}
+
+.quote-head span,
+.quote-meta span,
+.quote-parties span,
+.quote-totals span {
+  display: block;
+  color: #7b8c9e;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.quote-head strong {
+  display: block;
+  margin-top: 4px;
+  color: #16324d;
+  font: 800 22px 'Manrope', sans-serif;
+  letter-spacing: -0.03em;
+}
+
+.quote-meta,
+.quote-parties,
+.quote-totals {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.quote-parties {
+  grid-template-columns: 1.4fr 1fr;
+}
+
+.quote-meta strong,
+.quote-parties strong {
+  display: block;
+  margin-top: 4px;
+  color: #1b334b;
+  font: 700 14px 'Manrope', sans-serif;
+}
+
+.quote-parties p {
+  margin: 3px 0 0;
+  color: #5d7288;
+  font-size: 13px;
+}
+
+.quote-lines {
+  width: 100%;
+  margin-top: 22px;
+  border-collapse: collapse;
+}
+
+.quote-lines th {
+  padding: 8px 8px;
+  color: #6d8094;
+  border-bottom: 1px solid #d5e0eb;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-align: left;
+  text-transform: uppercase;
+}
+
+.quote-lines td {
+  padding: 12px 8px;
+  color: #24384c;
+  border-bottom: 1px solid #edf1f5;
+  font-size: 13px;
+  vertical-align: top;
+}
+
+.quote-lines td strong,
+.quote-lines td small {
+  display: block;
+}
+
+.quote-lines td small {
+  margin-top: 3px;
+  color: #7d8fa1;
+  font-size: 11px;
+}
+
+.quote-lines th:nth-child(n + 3),
+.quote-lines td:nth-child(n + 3) {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.quote-totals {
+  width: min(280px, 100%);
+  margin-left: auto;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+}
+
+.quote-totals div {
+  display: contents;
+}
+
+.quote-totals strong {
+  color: #1b334b;
+  font: 700 14px 'Manrope', sans-serif;
+  text-align: right;
+}
+
+.quote-totals div:last-child span,
+.quote-totals div:last-child strong {
+  margin-top: 6px;
+  padding-top: 8px;
+  border-top: 1px solid #d5e0eb;
+  color: var(--blue-800);
+}
+
+.quote-totals div:last-child strong {
+  font-size: 16px;
+}
+
+@media (max-width: 700px) {
+  .quote-sheet {
+    padding: 22px 16px 18px;
+  }
+
+  .quote-meta,
+  .quote-parties {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.quote-notes {
+  margin-top: 28px;
+  padding-top: 14px;
+  border-top: 1px solid #e4ebf2;
+  color: #6d8094;
+  font-size: 12px;
+}
+
+.quote-notes p {
+  margin: 0 0 6px;
+}
+
+.quote-missing {
+  width: min(480px, 100%);
+  margin: 12vh auto 0;
+  padding: 28px;
+  background: white;
+  border: 1px solid #d5e0eb;
+  border-radius: 14px;
+}
+
+.quote-missing h1 {
+  margin: 16px 0 6px;
+  font: 700 22px 'Manrope', sans-serif;
+}
+
+.quote-missing p {
+  margin: 0;
+  color: #6d8094;
+}
+
+@page {
+  size: A4;
+  margin: 12mm;
+}
+
+@media print {
+  body {
+    background: white;
+  }
+
+  .quote-page {
+    padding: 0;
+    background: white;
+  }
+
+  .quote-toolbar {
+    display: none;
+  }
+
+  .quote-sheet {
+    width: auto;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+}
+
 .part-source {
   margin: 0 -16px;
   padding: 8px 16px;

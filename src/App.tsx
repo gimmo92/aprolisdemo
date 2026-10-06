@@ -4,6 +4,7 @@ import {
   Box,
   Check,
   CircleHelp,
+  ClipboardList,
   FileText,
   Layers,
   LibraryBig,
@@ -31,6 +32,7 @@ import { BrandMark } from './components/BrandMark'
 import { ChatHistory } from './components/ChatHistory'
 import { MachinePicker } from './components/MachinePicker'
 import { PartsSidebar } from './components/PartsSidebar'
+import { demoAvailability, openCommercialDocument } from './lib/commercial'
 import {
   ApiError,
   askPartsAssistant,
@@ -216,11 +218,14 @@ async function prepareChatImage(file: File): Promise<ChatImagePayload> {
 
 function PartCard({
   part,
+  serial,
   onOpenExploded,
 }: {
   part: Part
+  serial?: string
   onOpenExploded?: (part: Part) => void
 }) {
+  const stock = demoAvailability(part.code)
   return (
     <article className="part-card">
       <div className="part-card-top">
@@ -252,6 +257,27 @@ function PartCard({
           <span>Riferimento</span>
           <strong>{part.item}</strong>
         </div>
+      </div>
+      <div className={`part-stock ${stock.inStock ? 'in' : 'out'}`}>
+        <span>{stock.inStock ? 'In stock' : 'Non in stock'}</span>
+        <strong>{stock.inStock ? `${stock.stockQty} pz` : 'Su ordinazione'}</strong>
+      </div>
+      <div className="part-actions">
+        <button
+          type="button"
+          className="primary"
+          onClick={() => openCommercialDocument('offerta', part, serial)}
+        >
+          <FileText size={14} />
+          Crea offerta
+        </button>
+        <button
+          type="button"
+          onClick={() => openCommercialDocument('ordine', part, serial)}
+        >
+          <ClipboardList size={14} />
+          Crea ordine
+        </button>
       </div>
       <div className="part-source">
         <FileText size={15} />
@@ -854,7 +880,11 @@ function App() {
                   onSelect={setSelectedPartKey}
                   onBack={() => setSelectedPartKey(undefined)}
                   renderDetail={(part) => (
-                    <PartCard part={part} onOpenExploded={openExplodedPart} />
+                    <PartCard
+                      part={part}
+                      serial={selectedSerial}
+                      onOpenExploded={openExplodedPart}
+                    />
                   )}
                 />
               )}
