@@ -1,4 +1,4 @@
-# Apròlis Parts Finder
+# Aftercore
 
 Web app con retrieval agentico per trovare un ricambio partendo dalla matricola
 del mezzo. Claude interpreta la richiesta e interroga l'indice Supabase; gli

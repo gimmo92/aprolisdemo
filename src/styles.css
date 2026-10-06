@@ -70,50 +70,23 @@ button {
 .brand-mark {
   display: inline-flex;
   align-items: center;
-  gap: 10px;
   text-decoration: none;
   color: inherit;
 }
 
-.brand-pictogram {
+.brand-mark img {
   display: block;
-  width: 34px;
-  height: 34px;
-  flex-shrink: 0;
+  height: 42px;
+  width: auto;
 }
 
-.brand-wordmark {
-  font-family: 'Manrope', 'DM Sans', system-ui, sans-serif;
-  font-size: 1.35rem;
-  font-weight: 800;
-  letter-spacing: -0.035em;
-  line-height: 1;
-  color: var(--blue-950);
-}
-
-.brand-mark--lg .brand-pictogram {
-  width: 44px;
-  height: 44px;
-}
-
-.brand-mark--lg .brand-wordmark {
-  font-size: 1.85rem;
+.brand-mark--lg img {
+  height: 72px;
 }
 
 .brand-mark-login {
   justify-content: center;
   margin: 0 auto 10px;
-}
-
-.brand-product {
-  color: #75859a;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  border-left: 1px solid #d5dee9;
-  margin-left: 2px;
-  padding-left: 12px;
 }
 
 .topbar-right,
@@ -845,6 +818,7 @@ a.pdf-reference:hover {
   color: var(--success);
   font-size: 9px;
   font-weight: 700;
+  font-variant-numeric: tabular-nums;
 }
 
 .part-main {
@@ -1245,17 +1219,8 @@ a.pdf-reference:hover {
     padding: 0 17px;
   }
 
-  .brand-pictogram {
-    width: 30px;
-    height: 30px;
-  }
-
-  .brand-wordmark {
-    font-size: 1.2rem;
-  }
-
-  .brand-product {
-    display: none;
+  .brand-mark img {
+    height: 34px;
   }
 
   .status-chip {

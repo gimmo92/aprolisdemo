@@ -7,6 +7,7 @@ import {
   findSupabaseCatalog,
   searchSupabaseParts,
 } from './lib/supabase-retrieval.js'
+import { selectSpareParts, MAX_SPARE_PARTS } from './lib/spare-part-selection.js'
 import { isSupabaseConfigured } from './lib/supabase.js'
 import type { IndexedPart } from './lib/types.js'
 
@@ -74,16 +75,48 @@ const searchTool: Anthropic.Messages.Tool = {
   },
 }
 
-const systemPrompt = `Sei l'assistente ricambi Apròlis.
-Rispondi sempre in italiano, in modo sintetico e professionale.
-Devi usare search_parts prima di proporre qualsiasi ricambio.
-Puoi citare solo codici, quantità, riferimenti e pagine presenti nei risultati del tool.
-Non inventare mai un codice o una compatibilità.
-Se i risultati non sono sufficienti, dichiaralo e chiedi un dettaglio tecnico mirato.
-La quantità è quella richiesta dalla tavola per quella specifica posizione, non la disponibilità a magazzino.
-Se l'utente invia una foto del pezzo: osserva forma, materiali, fori, connettori e marche visibili;
-deduci il tipo di componente e cerca con search_parts usando termini tecnici mirati (anche in inglese/francese).
-Non affermare il codice solo dalla foto: proponi solo ricambi trovati dal tool.`
+const systemPrompt = `Sei l'agente di identificazione ricambi after-sales Aftercore.
+Parli in italiano, tono tecnico ma chiaro.
+Usi SOLO il catalogo restituito da search_parts per la matricola corrente, più gli eventuali candidati pre-calcolati nel messaggio. Non inventare codici, prezzi o descrizioni.
+Il catalogo non ha prezzi né giacenza: price deve essere 0. Non dichiarare disponibilità di magazzino. La quantità è quella della tavola per quella posizione.
+
+## ALLEGATI
+- Se l'utente invia FOTO: osserva forma del pezzo, materiali, dentature, cinghie, etichette, part number stampati, brand/OEM.
+- Combina foto + testo del messaggio.
+- Se la foto è sfocata o ambigua, spiega cosa manca nel "message" e imposta spareParts=null o pochi candidati con confidence bassa.
+
+## REGOLE DI MATCH
+1. Proponi SOLO articoli presenti nel catalogo (code esatto del catalogo).
+2. Il TIPO del pezzo in foto deve coincidere con la descrizione catalogo (es. pignone/ingranaggio ≠ valvola ≠ filtro).
+3. Se l'utente scrive un codice/OEM identico a una voce catalogo → confidence DEVE essere 100 per quella voce.
+4. confidence è un intero 0–100: quanto sei sicuro che quel codice corrisponda a foto + descrizione utente.
+   - 90–100: codice visibile o match quasi certo
+   - 70–89: stesso tipo e descrizione molto coerente
+   - 50–69: plausibile ma da verificare
+   - sotto 50: non includere il pezzo (meglio ometterlo)
+5. Se nessun match credibile: spareParts=null. Meglio zero risultati che codici sbagliati.
+6. Se manca il prezzo in catalogo usa 0. Non inventare availability di magazzino.
+
+## STRUMENTO
+Alla prima risposta chiama search_parts con termini tecnici mirati (italiano, inglese o francese) ricavati da foto e testo.
+Quando non chiami il tool, la risposta finale è ESCLUSIVAMENTE JSON valido, senza markdown e senza testo fuori dal JSON:
+{
+  "message": "messaggio per l'utente: cosa hai visto, cosa proponi, cosa chiedere se serve",
+  "spareParts": null oppure [
+    {
+      "code": "CODICE_CATALOGO",
+      "description": "descrizione breve dal catalogo",
+      "price": 0,
+      "availability": "da_ordinare",
+      "leadTimeDays": 0,
+      "confidence": 85,
+      "oemCode": "opzionale",
+      "brand": "opzionale"
+    }
+  ]
+}
+
+Ordina spareParts per confidence decrescente. Massimo ${MAX_SPARE_PARTS} voci.`
 
 function textFromResponse(message: Anthropic.Messages.Message) {
   return message.content
@@ -93,7 +126,12 @@ function textFromResponse(message: Anthropic.Messages.Message) {
     .trim()
 }
 
-function publicPart(part: IndexedPart, catalogId?: string, viewId?: string) {
+function publicPart(
+  part: IndexedPart,
+  catalogId?: string,
+  viewId?: string,
+  confidence?: number,
+) {
   return {
     code: part.code,
     description: part.description,
@@ -105,6 +143,65 @@ function publicPart(part: IndexedPart, catalogId?: string, viewId?: string) {
     keywords: [],
     ...(catalogId ? { catalogId } : {}),
     ...(viewId ? { viewId } : {}),
+    ...(typeof confidence === 'number' ? { confidence } : {}),
+  }
+}
+
+const selectionSchema = z.object({
+  message: z.string().trim().min(1).max(2000),
+  spareParts: z
+    .array(
+      z.object({
+        code: z.string(),
+        confidence: z.coerce.number(),
+      }),
+    )
+    .nullable()
+    .optional(),
+})
+
+function extractSelection(text: string) {
+  const fenced = text.trim().match(/```(?:json)?\s*([\s\S]*?)```/i)
+  const body = (fenced?.[1] ?? text).trim()
+  const start = body.indexOf('{')
+  const end = body.lastIndexOf('}')
+  if (start < 0 || end < start) return null
+  try {
+    const parsed = selectionSchema.safeParse(JSON.parse(body.slice(start, end + 1)))
+    return parsed.success ? parsed.data : null
+  } catch {
+    return null
+  }
+}
+
+function formatHits(parts: IndexedPart[]) {
+  if (!parts.length) return 'nessuno'
+  return parts
+    .map(
+      (part) =>
+        `- ${part.code} | ${part.description} | pos. ${part.item} | pag. ${part.page}`,
+    )
+    .join('\n')
+}
+
+async function lookupParts(serial: string, query: string, limit: number, allowLocal: boolean) {
+  let parts: IndexedPart[] = []
+  if (isSupabaseConfigured()) {
+    try {
+      parts = (await searchSupabaseParts(serial, query, limit)) || []
+    } catch (error) {
+      console.error('Supabase search failed; using bundled fallback', error)
+    }
+  }
+  if (!parts.length && allowLocal) {
+    parts = searchParts(serial, query, limit)
+  }
+  return parts
+}
+
+function rememberParts(retrieved: Map<string, IndexedPart>, parts: IndexedPart[]) {
+  for (const part of parts) {
+    retrieved.set(`${part.code}|${part.item}|${part.page}`, part)
   }
 }
 
@@ -212,12 +309,19 @@ export default async function handler(
   })
 
   const model = process.env.ANTHROPIC_MODEL || 'claude-sonnet-5'
+  const retrieved = new Map<string, IndexedPart>()
+  const preliminary =
+    query.trim().length >= 2
+      ? await lookupParts(serial, query.trim(), MAX_SPARE_PARTS, Boolean(localCatalog))
+      : []
+  rememberParts(retrieved, preliminary)
   const requestText =
-    `Matricola verificata: ${serial}. Modello: ${catalog.version}. ` +
+    `Matricola verificata: ${serial}. Modello: ${catalog.version}.\n` +
+    `Candidati pre-calcolati dal server (ranking testuale, da verificare sulla foto):\n${formatHits(preliminary)}\n` +
     (hasImage
       ? `L'utente ha inviato una foto del ricambio${
           query.trim() ? ` con nota: ${query.trim()}` : ''
-        }. Identifica il pezzo e cerca i candidati più probabili nel catalogo.`
+        }. Identifica il pezzo e cerca i candidati nel catalogo.`
       : `Richiesta ricambio: ${query}`)
 
   const userContent: Anthropic.Messages.ContentBlockParam[] = hasImage
@@ -247,8 +351,6 @@ export default async function handler(
     },
   ]
 
-  const retrieved = new Map<string, IndexedPart>()
-
   try {
     let aiMessage = await client.messages.create({
       model,
@@ -269,28 +371,15 @@ export default async function handler(
         await Promise.all(
           toolUses.map(async (toolUse) => {
           const toolInput = toolInputSchema.safeParse(toolUse.input)
-          let parts: IndexedPart[] = []
-          if (toolInput.success) {
-            if (isSupabaseConfigured()) {
-              try {
-                parts =
-                  (await searchSupabaseParts(
-                    serial,
-                    toolInput.data.query,
-                    toolInput.data.limit,
-                  )) || []
-              } catch (error) {
-                console.error('Supabase search failed; using bundled fallback', error)
-              }
-            }
-            if (!parts.length && localCatalog) {
-              parts = searchParts(serial, toolInput.data.query, toolInput.data.limit)
-            }
-          }
-
-          for (const part of parts) {
-            retrieved.set(`${part.code}|${part.item}|${part.page}`, part)
-          }
+          const parts = toolInput.success
+            ? await lookupParts(
+                serial,
+                toolInput.data.query,
+                toolInput.data.limit,
+                Boolean(localCatalog),
+              )
+            : []
+          rememberParts(retrieved, parts)
 
           return {
             type: 'tool_result',
@@ -315,10 +404,13 @@ export default async function handler(
         system: systemPrompt,
         messages,
         tools: [searchTool],
+        ...(iteration === 1 ? { tool_choice: { type: 'none' as const } } : {}),
       })
     }
 
-    const verifiedParts = [...retrieved.values()].slice(0, 6)
+    const selection = extractSelection(textFromResponse(aiMessage))
+    const selected = selectSpareParts(query, [...retrieved.values()], selection?.spareParts)
+    const verifiedParts = selected.map((entry) => entry.part)
     let viewIds = new Map<string, string>()
     if (remoteCatalog) {
       try {
@@ -332,18 +424,19 @@ export default async function handler(
         console.error('Exploded deep-link lookup failed', error)
       }
     }
-    const parts = verifiedParts.map((part) =>
+    const parts = selected.map((entry) =>
       publicPart(
-        part,
+        entry.part,
         catalog.id,
-        part.assemblyCode ? viewIds.get(part.assemblyCode) : undefined,
+        entry.part.assemblyCode ? viewIds.get(entry.part.assemblyCode) : undefined,
+        entry.confidence,
       ),
     )
     const generatedAnswer =
-      textFromResponse(aiMessage) ||
+      selection?.message ||
       (parts.length
         ? `Ho trovato ${parts.length} ricambi compatibili nel catalogo.`
-        : 'Non ho trovato un ricambio sufficientemente compatibile.')
+        : 'Non ho trovato un ricambio sufficientemente compatibile. Servono un codice, una foto più nitida o il tipo di pezzo.')
     const answer = safeAnswer(generatedAnswer, verifiedParts)
 
     return response.status(200).json({

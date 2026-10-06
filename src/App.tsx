@@ -171,6 +171,7 @@ function PartCard({
         <span className="category-pill">{part.category}</span>
         <span className="verified-label">
           <Check size={13} strokeWidth={3} /> Verificato
+          {typeof part.confidence === 'number' ? ` ${part.confidence}%` : ''}
         </span>
       </div>
       <div className="part-main">
@@ -492,7 +493,7 @@ function App() {
   return (
     <main className="app-shell">
       <header className="topbar">
-        <BrandMark href="/" showProduct />
+        <BrandMark href="/" />
         <div className="topbar-right">
           <span className="status-chip">
             <span className="status-dot" />

@@ -9,6 +9,7 @@ export type Part = {
   keywords: string[]
   catalogId?: string
   viewId?: string
+  confidence?: number
 }
 
 export type Catalog = {
