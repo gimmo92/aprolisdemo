@@ -492,7 +492,10 @@ function App() {
           : lookup.resolvedBy === 'model'
             ? `modello ${lookup.matchedLabel}`
             : `catalogo ${lookup.matchedLabel}`
-      const residual = residualSearchQuery(value, lookup.matchedLabel)
+      const residual = residualSearchQuery(
+        value,
+        [lookup.matchedLabel, lookup.serial, ...(lookup.catalog.serialNumbers || [])].join(' '),
+      )
 
       if (residual.length >= 3) {
         addMessage({
